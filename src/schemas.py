@@ -54,6 +54,9 @@ ClaimKind = Literal[
     "negation",
     "comparative",
     "quantified",
+    "inference",
+    "prediction",
+    "recommendation",
 ]
 
 ClaimLabel = Literal[

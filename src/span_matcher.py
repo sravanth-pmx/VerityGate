@@ -33,6 +33,20 @@ ABSENCE_IN_CLAIM = re.compile(
     re.IGNORECASE,
 )
 
+_INFERENCE_PHRASES = re.compile(
+    r"\blikely due to\b|"
+    r"\bprobably caused by\b|"
+    r"\bappears to be caused by\b|"
+    r"\bseems likely\b|"
+    r"\bit is likely\b|"
+    r"\bwe can approve\b|"
+    r"\bshould approve\b|"
+    r"\bgood investment\b|"
+    r"\bgood neighborhood\b|"
+    r"\bqualified for\b",
+    re.IGNORECASE,
+)
+
 # Evidence text that confirms info is missing/pending
 DEFERRAL_IN_EVIDENCE = re.compile(
     r"has not been finalized|"
@@ -64,6 +78,8 @@ def label_claim_against_spans(
     """
     ct = claim_text.strip()
     ct_lower = ct.lower().rstrip(".")
+    if _INFERENCE_PHRASES.search(ct):
+        return "UNSUPPORTED", None, "claim is an inference/conclusion, not direct evidence"
 
     # ── 1. Claim says evidence is absent → NOT_IN_EVIDENCE ────────────
     if ABSENCE_IN_CLAIM.search(ct):

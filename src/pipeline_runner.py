@@ -21,14 +21,14 @@ from .contradiction_checks import check_contradictions
 # ── Writer prompt ──────────────────────────────────────────────────────
 
 WRITER_SYSTEM_PROMPT = """\
-You are a friendly and helpful assistant. Answer the question naturally and
-conversationally using ONLY the provided evidence. Be warm but accurate.
+You answer using ONLY the provided evidence.
 
-If the evidence fully covers the question, answer confidently and naturally.
-If the evidence is missing something, be upfront — say what you know and
-what you don't. Don't make anything up.
-
-Keep it concise and conversational — like you're talking to a colleague.
+Be concise and explicit:
+- If the evidence directly answers the question, answer with only the supported facts.
+- If the evidence does not answer the question, say what is missing.
+- If the evidence contains conflicting information, mention the conflict.
+- Do not infer causes, recommendations, predictions, or conclusions unless the evidence states them.
+- Do not add friendly filler or extra background facts.
 """
 
 WRITER_USER_TEMPLATE = """\
@@ -80,8 +80,7 @@ def run_pipeline(cases: list[GoldCase]) -> list[PipelineResult]:
                         verifier_out.claims.append(dc)
             # Log possible conflicts for audit trail
             if conflict_result.possible:
-                pc_texts = [pc.claim_text for pc in conflict_result.possible]
-                verifier_out.filter_stats["possible_conflicts"] = pc_texts
+                verifier_out.filter_stats["possible_conflicts"] = conflict_result.possible
 
             # 5. gate
             gate_out = apply_gate(
@@ -155,6 +154,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Verity-H pipeline")
     parser.add_argument("--cases", type=str, default=None, help="Path to gold_cases.jsonl")
     parser.add_argument("--output", type=str, default=None, help="Output JSONL path")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of cases to run")
     parser.add_argument("--skip-calibration", action="store_true", help="Skip calibration check")
     args = parser.parse_args()
 
@@ -164,7 +164,7 @@ def main() -> None:
     # Calibration check (unless mock mode or skipped)
     import os
     if os.getenv("LLM_MODE", "mock") != "mock" and not args.skip_calibration:
-        from .calibration import run_calibration
+        from .report.calibration import run_calibration
         print("[pipeline] running calibration probes...")
         passed, warnings = run_calibration()
         for w in warnings:
@@ -175,6 +175,8 @@ def main() -> None:
             print("[pipeline] calibration passed.")
 
     cases = load_gold_cases(cases_path)
+    if args.limit:
+        cases = cases[:args.limit]
     print(f"[pipeline] loaded {len(cases)} cases")
 
     results = run_pipeline(cases)

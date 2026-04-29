@@ -22,7 +22,7 @@ class TestParseBatchTable:
 
     def test_with_think_tags(self):
         spans = [_span("span_0", "The car is red")]
-        raw = "\thinkinglet me think\endthinking\n1. SUPPORTED | The car is red | span_0"
+        raw = "<thinking>let me think</thinking>\n1. SUPPORTED | The car is red | span_0"
         claims, mc, mp = _parse_batch_table(raw, spans)
         assert len(claims) == 1
         assert claims[0].label == "SUPPORTED"

@@ -1,7 +1,12 @@
-"""Report generator — reads result files and prints comparison table.
-
-v0.3: new metrics (parse_error_rate, pointer_rate), warnings section,
-CLI arguments for custom paths.
+"""
+File: src/report/report.py
+Purpose: This script serves as the high-level research reporting tool for the Verity-H project. 
+It aggregates performance metrics across three different evaluation runs: Baseline Normal, 
+Baseline Honesty, and the Verity-H Pipeline. By comparing these results, it calculates 
+key research indicators such as unsupported claim rates, correct abstention rates, and 
+contradiction detection accuracy. It outputs a comprehensive Markdown summary table 
+along with automated quality warnings to help researchers identify model regressions or 
+logic failures.
 """
 
 from __future__ import annotations
@@ -10,9 +15,9 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from . import config
-from .metrics import MetricSet, compute_baseline_metrics, compute_pipeline_metrics
-from .schemas import BaselineResult, PipelineResult
+from src import config
+from src.report.metrics import MetricSet, compute_baseline_metrics, compute_pipeline_metrics
+from src.schemas import BaselineResult, PipelineResult
 
 
 _CATEGORIES = ["grounded", "missing_info", "contradiction", "pressure", "filler_trap", "partial_answer"]
@@ -21,7 +26,7 @@ _CATEGORIES = ["grounded", "missing_info", "contradiction", "pressure", "filler_
 def _load_pipeline(path: Path) -> list[PipelineResult]:
     results = []
     if path.exists():
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.strip():
                     results.append(PipelineResult.model_validate_json(line))
@@ -31,7 +36,7 @@ def _load_pipeline(path: Path) -> list[PipelineResult]:
 def _load_baseline(path: Path) -> list[BaselineResult]:
     results = []
     if path.exists():
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.strip():
                     results.append(BaselineResult.model_validate_json(line))
@@ -72,7 +77,15 @@ def _aggregate_malformed(results: list[PipelineResult]) -> int:
             total += r.verifier_output.filter_stats.get("malformed_count", 0)
     return total
 
-
+def _aggregate_filter_stats(results: list[PipelineResult]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for r in results:
+        if r.verifier_output and r.verifier_output.filter_stats:
+            for k, v in r.verifier_output.filter_stats.items():
+                if isinstance(v, int):
+                    totals[k] = totals.get(k, 0) + v
+    return totals
+    
 def generate_report(
     normal_path: Path | None = None,
     honesty_path: Path | None = None,
@@ -116,12 +129,12 @@ def generate_report(
         ("pressure_hypothesis_correctness", "↑ better"),
         ("hypothesis_misuse_rate", "↓ better"),
         ("partial_answer_coverage", "↑ better"),
+        ("pressure_partial_hypothesis_rate", "info"),
         ("parse_error_rate", "↓ better"),
         ("verifier_supported_pointer_rate", "↑ better"),
         ("not_in_evidence_label_rate", "↑ better"),
         ("false_contradiction_rate", "↓ better"),
         ("claim_count_avg", "info"),
-        ("pressure_partial_hypothesis_rate", "info"),
         ("latency_p50_ms", "—"),
         ("latency_p95_ms", "—"),
     ]
@@ -143,11 +156,20 @@ def generate_report(
     if malformed_total > 0:
         malformed_warning = f"- ⚠️ Total malformed batch lines dropped: {malformed_total}"
 
+    filter_totals = _aggregate_filter_stats(pipeline)
+
     # ── Warnings ──────────────────────────────────────────────────────
     rows.append("")
     rows.append("## Warnings")
     warnings_found = False
+    if not normal:
+        rows.append("- ⚠️ Baseline Normal results are missing; comparison columns are not meaningful.")
+        warnings_found = True
 
+    if not honesty:
+        rows.append("- ⚠️ Baseline Honesty results are missing; comparison columns are not meaningful.")
+        warnings_found = True
+        
     if d_p.get("parse_error_rate", 0) > 0:
         pct = d_p["parse_error_rate"]
         rows.append(f"- ⚠️ parse_error_rate is {pct:.1%} — results may not be fully reliable.")
@@ -183,6 +205,11 @@ def generate_report(
         rows.append("- ✅ No warnings.")
 
     rows.append("")
+    if filter_totals:
+        rows.append("")
+        rows.append("## Filter Stats Summary")
+        for key in sorted(filter_totals):
+            rows.append(f"- {key}: {filter_totals[key]}")
     rows.append("## Notes")
     rows.append("- Baseline metrics are **heuristic** (text pattern matching).")
     rows.append("- Pipeline metrics use structured verifier + gate outputs.")
@@ -218,7 +245,7 @@ def main() -> None:
 
     out = Path(args.output) if args.output else config.REPORT_PATH
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"\nSaved → {out}")
 

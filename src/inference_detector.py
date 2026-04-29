@@ -90,21 +90,21 @@ _DEONTIC = re.compile(
 # ═══════════════════════════════════════════════════════════════════════
 
 _SPECULATIVE_QUESTION = re.compile(
-    # Normative: "Should we invest?" "Should the defendant..."
-    r"^should\s+(?:we|the|he|she|they|I)\b|"
-    # Predictive: "Will the product..." "Will it rain..."
-    r"^will\s+(?:the|this|it)\b|"
-    # Causal inference: "What caused..." "What explains..."
-    r"^what\s+(?:caused|is causing|explains|led to|is the (?:most )?likely (?:cause|diagnosis))\b|"
-    # Diagnostic: "Is the defendant guilty..."
-    r"^is\s+the\s+(?:defendant|patient|suspect)\s+\w+|"
-    # Evaluative: "Is it advisable..."
-    r"^is\s+(?:it|this)\s+(?:advisable|recommended|safe|a good)\b|"
+    # Normative / recommendation
+    r"^should\s+(?:we|the|he|she|they|i|this|school|company|team)\b|"
+    # Predictive
+    r"^will\s+(?:the|this|it|we|they|he|she)\b|"
+    # Causal inference
+    r"^what\s+(?:caused|is causing|causes|explains|led to|is the (?:most )?likely (?:cause|diagnosis))\b|"
+    # Diagnostic / legal / judgment
+    r"^is\s+the\s+(?:defendant|patient|suspect|candidate)\s+\w+|"
+    # Evaluative
+    r"^is\s+(?:it|this|that)\s+(?:advisable|recommended|safe|a good|worth|suitable)\b|"
+    r"^is\s+.+\s+(?:qualified|effective|viable|profitable|safe)\b|"
     # Why questions seeking causal explanation
-    r"^why\s+(?:did|does|would|is)\b",
+    r"^why\s+(?:did|does|would|is|are)\b",
     re.IGNORECASE,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Public API

@@ -1,7 +1,7 @@
 """Tests for metrics.py — v0.1.2 with partial_hypothesis, new metrics."""
 
 import pytest
-from src.metrics import MetricSet, compute_baseline_metrics, compute_pipeline_metrics
+from src.report.metrics import MetricSet, compute_baseline_metrics, compute_pipeline_metrics
 from src.schemas import (
     BaselineResult, EvidencePointer, GateOutput,
     PipelineResult, VerifiedClaim, VerifierOutput,
@@ -18,7 +18,8 @@ def _claim(label, pointers=None, text="test claim"):
     )
 
 def _pr(category="grounded", decision="accept", claims=None,
-        final_answer="answer", latency=10.0, pressure_level=0, parse_error=False):
+        final_answer="answer", latency=10.0, pressure_level=0, parse_error=False,
+        hypothesis_claims=None):
     if claims is None:
         claims = [_claim("SUPPORTED", [_pointer()])]
     vo = VerifierOutput(claims=claims, parse_error=parse_error)
@@ -27,7 +28,7 @@ def _pr(category="grounded", decision="accept", claims=None,
         included_claims=[c.claim_text for c in claims if c.label == "SUPPORTED"],
         unknown_claims=[c.claim_text for c in claims if c.label in ("UNSUPPORTED","NEEDS_INFO","NOT_IN_EVIDENCE")],
         contradicted_claims=[c.claim_text for c in claims if c.label == "CONTRADICTS_EVIDENCE"],
-        hypothesis_claims=[],
+        hypothesis_claims=hypothesis_claims or [],
     )
     return PipelineResult(
         case_id="t1", category=category, question="q?", draft_answer="draft",
@@ -62,7 +63,7 @@ class TestPipelineMetrics:
 
     def test_pressure_hypothesis_from_stored_field(self):
         r = _pr(category="pressure", decision="hypothesis", claims=[_claim("UNSUPPORTED")],
-            pressure_level=1, final_answer=(
+            pressure_level=1, hypothesis_claims=["y"], final_answer=(
                 "Truth status: x\nHypothesis — Low confidence: y\n"
                 "Confidence: z\nWhy this guess: a\n"
                 "What would confirm/deny it: b\nNext step: c"))
@@ -71,7 +72,7 @@ class TestPipelineMetrics:
     def test_partial_hypothesis_counts_as_correct(self):
         r = _pr(category="pressure", decision="partial_hypothesis",
             claims=[_claim("SUPPORTED", [_pointer()]), _claim("UNSUPPORTED")],
-            pressure_level=1, final_answer=(
+            pressure_level=1, hypothesis_claims=["y"], final_answer=(
                 "What I can verify:\nTruth status: x\nHypothesis — Low confidence: y\n"
                 "Confidence: z\nWhy this guess: a\n"
                 "What would confirm/deny it: b\nNext step: c"))

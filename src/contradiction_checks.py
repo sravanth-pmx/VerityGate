@@ -45,7 +45,7 @@ _DATE_RE = re.compile(
 
 class ConflictResult(NamedTuple):
     forced: list[VerifiedClaim]           # Always gate = contradiction
-    possible: list[VerifiedClaim]         # Logged only, no gate override
+    possible: list[dict]                  # Logged only, no gate override
 
 
 def check_contradictions(
@@ -58,8 +58,7 @@ def check_contradictions(
     Possible: numeric/date/money value conflicts → logged only.
     """
     forced: list[VerifiedClaim] = []
-    possible: list[VerifiedClaim] = []
-
+    possible: list[dict] = []
     if len(spans) < 2:
         return ConflictResult(forced, possible)
 
@@ -106,7 +105,7 @@ def _check_status_conflict(
 
 def _check_possible_conflict(
     s_a: EvidenceSpan, s_b: EvidenceSpan,
-) -> VerifiedClaim | None:
+) -> dict | None:
     """Detect numeric/date value conflicts without forcing gate decision.
 
     v0.4: This returns a CONTRADICTS_EVIDENCE claim but the gate does
@@ -164,16 +163,18 @@ def _make_contradiction(
 
 def _make_possible_conflict(
     claim_text: str, span_a: EvidenceSpan, span_b: EvidenceSpan, kind: str,
-) -> VerifiedClaim:
-    return VerifiedClaim(
-        claim_id=f"possible_{span_a.span_id}_{span_b.span_id}",
-        claim_text=claim_text, claim_kind=kind,
-        label="CONTRADICTS_EVIDENCE",
-        evidence_pointers=[
-            EvidencePointer(span_id=span_a.span_id, start_char=span_a.start_char,
-                end_char=span_a.end_char, text_preview=span_a.text[:80]),
-            EvidencePointer(span_id=span_b.span_id, start_char=span_b.start_char,
-                end_char=span_b.end_char, text_preview=span_b.text[:80]),
-        ],
-        notes="possible_conflict: logged for audit, does NOT force gate decision",
-    )
+) -> dict:
+    """Return audit-only possible conflict.
+
+    Important: possible conflicts must never be represented as
+    CONTRADICTS_EVIDENCE claims, because that label forces the gate into
+    contradiction mode.
+    """
+    return {
+        "claim_id": f"possible_{span_a.span_id}_{span_b.span_id}",
+        "claim_text": claim_text,
+        "claim_kind": kind,
+        "span_ids": [span_a.span_id, span_b.span_id],
+        "text_previews": [span_a.text[:80], span_b.text[:80]],
+        "notes": "possible_conflict: audit only, does NOT force gate decision",
+    }

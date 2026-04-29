@@ -73,6 +73,27 @@ _QUESTION_SLOT_PATTERNS: list[tuple[re.Pattern, set[str]]] = [
      {"guilty", "verdict", "defendant", "crime", "evidence"}),
 ]
 
+# Question intent groups used to check whether a SUPPORTED claim actually
+# answers the requested slot. Keep this lightweight; do not turn it into
+# a large domain ontology.
+_QUESTION_INTENT_PATTERNS: list[tuple[re.Pattern, set[str]]] = [
+    (re.compile(r"\bhow fast\b|\btop speed\b|\bspeed\b", re.I),
+     {"speed", "mph", "kmh", "km/h", "top speed"}),
+    (re.compile(r"\benrolled\b|\benrollment\b|\bstudents enrolled\b", re.I),
+     {"enrolled", "enrollment", "students"}),
+    (re.compile(r"\bcode reviews?\b|\breview language\b|\blanguage\b", re.I),
+     {"language", "code review", "reviews"}),
+    (re.compile(r"\bgrade\b|\breceive\b", re.I),
+     {"grade", "score", "mark"}),
+    (re.compile(r"\benergy consumption\b|\benergy usage\b", re.I),
+     {"energy", "consumption", "usage", "kwh"}),
+    (re.compile(r"\brainfall\b", re.I),
+     {"rainfall", "rain", "inches"}),
+    (re.compile(r"\bspecifications?\b", re.I),
+     {"specifications", "specs"}),
+    (re.compile(r"\bside effects?\b|\bcontraindications?\b|\bstorage\b", re.I),
+     {"side effects", "contraindications", "storage"}),
+]
 
 class FilterStats:
     """Track what was filtered and why."""
@@ -250,6 +271,20 @@ def _extract_missing_subject(text: str) -> str:
             return m.group(1).strip()
     return ""
 
+def _is_broad_question(question: str) -> bool:
+    """Broad summary/detail questions should allow grounded facts from the draft.
+
+    Examples:
+    - What were the results of the environmental assessment?
+    - What did the doctor report?
+    - What are the quarterly financial results?
+    - What happened at the board meeting?
+    """
+    q = question.strip().lower()
+    return bool(re.match(
+        r"^what\s+(?:were|was|are|is|did|happened|happens)\b",
+        q,
+    ))
 
 # ── SUPPORTED claim relevance filter (v0.4 experiment) ──────────────
 # Downgrades SUPPORTED claims that don't share keywords with the question.
@@ -260,20 +295,24 @@ def filter_supported_claims_by_relevance(
     claims: list[dict],
     question: str,
 ) -> list[dict]:
-    """Downgrade SUPPORTED claims with no question-keyword overlap.
+    """Downgrade SUPPORTED claims that do not answer the requested slot.
 
-    If a SUPPORTED claim shares zero keywords with the question (after
-    removing stop words), it is downgraded to UNSUPPORTED. This prevents
-    large models from inflating the SUPPORTED count with irrelevant facts.
-
-    If the question itself has no content keywords (e.g. "What happened?"),
-    the check is skipped — all claims pass through.
-
-    Returns: modified claims list (label may be changed, notes appended).
+    This is intentionally conservative:
+    - If the question has a clear requested intent, at least one intent keyword
+      must appear in the supported claim.
+    - Otherwise fall back to light keyword overlap.
+    - Do not use this as a full semantic matcher.
     """
+    # Broad "what happened / what were results / what did X report" questions
+    # should not require exact keyword overlap. The valid answer may be the
+    # detailed findings, not the category words in the question.
+    if _is_broad_question(question):
+        return claims
+
+    intent_keywords = _extract_question_intent_keywords(question)
     q_kw = _extract_question_content_keywords(question)
-    if not q_kw:
-        # Question has no content keywords — skip check
+
+    if not intent_keywords and not q_kw:
         return claims
 
     for c in claims:
@@ -282,15 +321,49 @@ def filter_supported_claims_by_relevance(
 
         ct = c.get("claim_text", "")
         claim_kw = _extract_keywords(ct)
+        claim_l = ct.lower()
+
+        # Stronger check for known requested slots.
+        if intent_keywords:
+            if not _claim_matches_intent(claim_l, claim_kw, intent_keywords):
+                c["label"] = "UNSUPPORTED"
+                c["evidence_pointers"] = []
+                notes = c.get("notes", "")
+                c["notes"] = notes + " [rel: supported fact does not answer requested slot]"
+            continue
+
+        # Generic fallback: require at least one content-keyword overlap.
         overlap = claim_kw & q_kw
         if not overlap:
-            # Downgrade to UNSUPPORTED with note
             c["label"] = "UNSUPPORTED"
             c["evidence_pointers"] = []
             notes = c.get("notes", "")
             c["notes"] = notes + " [rel: no overlap with question keywords]"
 
     return claims
+
+def _extract_question_intent_keywords(question: str) -> set[str]:
+    """Return stricter intent keywords when the user asks for a specific slot."""
+    result: set[str] = set()
+    for pattern, kws in _QUESTION_INTENT_PATTERNS:
+        if pattern.search(question):
+            result |= kws
+    return result
+
+
+def _claim_matches_intent(
+    claim_lower: str,
+    claim_keywords: set[str],
+    intent_keywords: set[str],
+) -> bool:
+    """Check if a supported claim answers the requested intent."""
+    for kw in intent_keywords:
+        if " " in kw:
+            if kw in claim_lower:
+                return True
+        elif kw in claim_keywords or kw in claim_lower:
+            return True
+    return False
 
 
 def _extract_question_content_keywords(question: str) -> set[str]:

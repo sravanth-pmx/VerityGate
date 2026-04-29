@@ -21,9 +21,9 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
-from .llm_client import llm_call
-from .schemas import EvidencePointer, EvidenceSpan, VerifiedClaim, VerifierOutput
+from src import config
+from src.llm_client import llm_call
+from src.schemas import EvidencePointer, EvidenceSpan, VerifiedClaim, VerifierOutput
 from .span_matcher import label_claim_against_spans, relabel_claims
 from .claim_filter import (
     filter_claims_pre_labeling,
@@ -53,7 +53,9 @@ CRITICAL: When the draft says something is NOT in the evidence (e.g., "not menti
 Only list missing information that directly answers the user's requested slot.
 Do not list related-but-unasked missing details.
 
-Be thorough — extract every distinct fact, number, date, name, and attribution.
+Be thorough, but stay relevant to the user's question.
+Extract distinct facts, numbers, dates, names, and attributions from the draft answer.
+Do NOT add unrelated background facts merely because they appear in the evidence.
 Return ONLY a numbered table. One claim per line. No other text.
 Format: NUMBER. LABEL | claim text | span_id or none
 
@@ -215,15 +217,14 @@ def verify(
     claim_texts = [c.claim_text for c in claims]
     filtered_texts, pre_stats = filter_claims_pre_labeling(claim_texts, question)
     # Deduplicate claim objects: keep first occurrence by normalized text
-    filtered_text_list = list(filtered_texts)  # preserve order
+    filtered_norms = {_normalize_text(t) for t in filtered_texts}
     seen_norm: set[str] = set()
     deduped: list[VerifiedClaim] = []
     for c in claims:
         norm = _normalize_text(c.claim_text)
         if norm in seen_norm:
             continue
-        # Only keep if this text survived pre-filter
-        if c.claim_text in set(filtered_text_list):
+        if norm in filtered_norms:
             seen_norm.add(norm)
             deduped.append(c)
     claims = deduped
@@ -312,12 +313,13 @@ def _parse_batch_table(raw: str, spans: list[EvidenceSpan]) -> tuple[list[Verifi
 
         # Try to parse: NUMBER. LABEL | claim_text | span_id
         m = re.match(
-            r"^(?:\d+[.)]\s*|[-•]\s*)"           # number prefix
-            r"(\w[\w_]*)"                          # label
-            r"\s*\|\s*"                            # pipe separator
-            r"(.+?)"                               # claim text
-            r"(?:\s*\|\s*(span_\d+|none|n/a))?\s*$",  # optional span_id
-            line, re.I,
+            r"^(?:\d+[.)]\s*|[-•]\s*)"
+            r"(\w[\w_]*)"
+            r"\s*\|\s*"
+            r"(.+?)"
+            r"(?:\s*\|\s*(.+?))?\s*$",
+            line,
+            re.I,
         )
         if not m:
             # Fallback: try without pipe separator (LABEL claim_text)
@@ -352,21 +354,23 @@ def _parse_batch_table(raw: str, spans: list[EvidenceSpan]) -> tuple[list[Verifi
                 malformed_previews.append(line[:80])
             continue
 
-        # Build pointer if (SUPPORTED or CONTRADICTS_EVIDENCE) + valid span_id
+        # Build pointers if (SUPPORTED or CONTRADICTS_EVIDENCE) + valid span IDs.
+        # Accept "span_0", "span_0, span_1", "span_0 and span_1".
         pointers: list[dict] = []
-        if label_str in ("SUPPORTED", "CONTRADICTS_EVIDENCE") and span_id_str and span_id_str.lower() not in ("none", "n/a"):
-            span = span_map.get(span_id_str)
-            if span:
-                pointers = [{
-                    "span_id": span.span_id,
-                    "start_char": span.start_char,
-                    "end_char": span.end_char,
-                    "text_preview": span.text[:80],
-                }]
-            elif label_str == "SUPPORTED":
-                label_str = "UNSUPPORTED"  # bad span_id → downgrade
-            elif label_str == "CONTRADICTS_EVIDENCE":
-                label_str = "UNSUPPORTED"  # bad span_id → downgrade
+        if label_str in ("SUPPORTED", "CONTRADICTS_EVIDENCE") and span_id_str:
+            span_ids = re.findall(r"span_\d+", span_id_str, flags=re.I)
+            for sid in span_ids:
+                span = span_map.get(sid.lower())
+                if span:
+                    pointers.append({
+                        "span_id": span.span_id,
+                        "start_char": span.start_char,
+                        "end_char": span.end_char,
+                        "text_preview": span.text[:80],
+                    })
+
+            if not pointers:
+                label_str = "UNSUPPORTED"
 
         if label_str == "SUPPORTED" and not pointers:
             label_str = "UNSUPPORTED"

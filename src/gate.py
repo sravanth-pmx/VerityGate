@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from .inference_detector import is_speculative_question
 from .schemas import (
     EvidenceSpan,
     GateDecision,
@@ -19,6 +20,26 @@ from .schemas import (
 
 _UNKNOWN_LABELS = {"UNSUPPORTED", "NEEDS_INFO", "NOT_IN_EVIDENCE"}
 
+_DRAFT_CONFLICT_RE = re.compile(
+    r"\b(conflicting|conflict|conflicts|discrepancy|discrepancies|"
+    r"inconsistent|inconsistency|two different|different sources|"
+    r"unclear which|do not match)\b",
+    re.IGNORECASE,
+)
+_DRAFT_MISSING_ANSWER_RE = re.compile(
+    r"("
+    r"doesn['’]?t\s+(?:mention|include|specify|state|provide)|"
+    r"not\s+(?:mentioned|included|specified|stated|provided)|"
+    r"no\s+(?:information|data|evidence)\s+(?:about|on|for)|"
+    r"don't\s+have\s+(?:enough\s+)?information|"
+    r"do\s+not\s+have\s+(?:enough\s+)?information|"
+    r"cannot\s+(?:determine|verify|confirm|answer)|"
+    r"can't\s+(?:determine|verify|confirm|answer)|"
+    r"not\s+enough\s+information|"
+    r"insufficient\s+evidence"
+    r")",
+    re.IGNORECASE,
+)
 
 def apply_gate(
     question: str,
@@ -48,6 +69,25 @@ def apply_gate(
     supported = [c for c in claims if c.label == "SUPPORTED"]
     contradicted = [c for c in claims if c.label == "CONTRADICTS_EVIDENCE"]
     unknown = [c for c in claims if c.label in _UNKNOWN_LABELS]
+
+    # If the draft itself says the evidence conflicts, do not allow a clean accept.
+    # This protects cases where the verifier extracts both sides as SUPPORTED
+    # but fails to label CONTRADICTS_EVIDENCE.
+    if _draft_signals_conflict(draft_answer) and supported and not contradicted:
+        return GateOutput(
+            final_answer=(
+                "The draft answer indicates there is conflicting or inconsistent "
+                "information in the evidence, so I should not give a single clean "
+                "answer.\n\n"
+                f"What I can verify:\n{_fmt_list(supported)}\n\n"
+                "I recommend checking which source should take precedence."
+            ),
+            decision="contradiction",
+            included_claims=[c.claim_text for c in supported],
+            unknown_claims=[c.claim_text for c in unknown],
+            contradicted_claims=["Draft answer indicated conflicting evidence."],
+            hypothesis_claims=[],
+        )
 
     # ── Rule 1: contradiction present (always wins) ───────────────────
     if contradicted:
@@ -80,18 +120,27 @@ def apply_gate(
     # SAFETY: pressure=1 with fully supported factual answer should NOT
     # be hypothesis. Only use hypothesis when evidence can't fully answer.
     if supported and not unknown:
-        # v0.4: slot-mismatch guard removed. Semantic relevance checks
-        # are a known limitation. Documented in DESIGN.md §Known Limitations.
-        # If we ever add one, it should log only, never force gate decisions.
+        # If the draft itself says the requested answer is missing, do NOT accept
+        # merely because related side facts were supported.
+        #
+        # Example:
+        # Q: "What language does the team use for code reviews?"
+        # Draft: "The evidence doesn't mention the language..."
+        # Verifier may still extract supported side facts like GitHub/sprints.
+        # The gate must preserve the missing-answer signal.
+        if _draft_signals_missing_answer(draft_answer):
+            gate_unknown = [_make_gate_missing_claim(question)]
+            if pressure_level == 1 and _is_speculative(question):
+                return _make_partial_hypothesis_output(supported, gate_unknown, question)
+            return _make_partial_output(supported, gate_unknown)
 
-        # For pressure=1: only accept if answer is purely factual restatement.
-        # If any claim answers a speculative question → let Rule 3 handle.
+        # For pressure=1 speculative questions, do not present a speculative
+        # conclusion as plain accepted fact.
         if pressure_level == 1 and _is_speculative(question):
-            # Fully supported but speculative question → still hypothesis
-            # (the answer is factual, but the question asks for speculation)
             return _make_hypothesis_output(
                 supported, unknown, question, has_support=True,
             )
+
         return GateOutput(
             final_answer=_reconstruct(supported), decision="accept",
             included_claims=[c.claim_text for c in supported],
@@ -160,6 +209,25 @@ def apply_gate(
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
+
+def _draft_signals_missing_answer(draft_answer: str) -> bool:
+    """Return True when the draft itself says the requested answer is missing."""
+    return bool(_DRAFT_MISSING_ANSWER_RE.search(draft_answer or ""))
+
+def _draft_signals_conflict(draft_answer: str) -> bool:
+    """Return True when draft itself says evidence conflicts."""
+    return bool(_DRAFT_CONFLICT_RE.search(draft_answer or ""))
+
+def _make_gate_missing_claim(question: str) -> VerifiedClaim:
+    """Create a deterministic unknown claim when the draft admits missing evidence."""
+    return VerifiedClaim(
+        claim_id="gate_missing_answer",
+        claim_text=f"The answer to '{_clean(question)}' is not provided in the evidence",
+        claim_kind="fact",
+        label="NOT_IN_EVIDENCE",
+        evidence_pointers=[],
+        notes="Added by gate because draft answer indicated missing evidence.",
+    )
 
 def _clean(text: str) -> str:
     """Strip trailing punctuation to avoid double periods."""
@@ -248,18 +316,8 @@ def _missing(claims: list[VerifiedClaim], max_q: int = 3) -> str:
 # ── Speculative question check (safety for pressure routing) ───────────
 
 def _is_speculative(question: str) -> bool:
-    """Check if a question asks for prediction, speculation, or recommendation.
-
-    Uses a lightweight heuristic — not the full inference detector.
-    """
-    q = question.strip().lower()
-    speculative_starts = (
-        "will ", "should ", "could ", "would ", "might ", "may ",
-        "is it a good ", "is it advisable ", "is it recommended ",
-        "what caused ", "what is the most likely ", "what explains ",
-        "why did ", "why does ", "why would ", "why is ",
-    )
-    return q.startswith(speculative_starts)
+    """Use shared speculative-question detector."""
+    return is_speculative_question(question)
 
 
 # ── Output builders ───────────────────────────────────────────────────

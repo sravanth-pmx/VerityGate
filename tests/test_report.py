@@ -5,7 +5,7 @@ import tempfile
 import pytest
 from pathlib import Path
 
-from src.report import generate_report
+from src.report.report import generate_report
 from src import config
 from src.schemas import (
     BaselineResult, PipelineResult, VerifierOutput, GateOutput,

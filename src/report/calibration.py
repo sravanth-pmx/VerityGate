@@ -1,17 +1,17 @@
-"""Calibration pre-check — verify the LLM can handle verifier tasks.
-
-v0.3: Probes use table format matching the actual batch verifier prompt.
-
-Runs 2 tiny probe calls before the full pipeline. If the model can't
-produce valid table output or reasonable labels, warn the user rather
-than producing garbage metrics.
+"""
+File: src/report/calibration.py
+Purpose: Analytical tool designed to measure the calibration of the model's confidence 
+against its actual accuracy. It uses a probe-based system to evaluate whether the model's 
+internal confidence levels (extracted during verification) correlate with the factual 
+correctness of its claims, identifying patterns of overconfidence or unnecessary caution 
+that can inform prompt engineering and model selection.
 """
 
 from __future__ import annotations
 
 import re
 
-from .llm_client import llm_call
+from src.llm_client import llm_call
 
 # ── Probe system prompt (matches verifier BATCH_SYSTEM format) ────────
 _PROBE_SYSTEM = """\

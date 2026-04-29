@@ -1,7 +1,7 @@
 """Tests for calibration.py — v0.3 table-format probes."""
 
 import pytest
-from src.calibration import run_calibration, _LINE_RE, _VALID_LABELS
+from src.report.calibration import run_calibration, _LINE_RE, _VALID_LABELS
 
 
 class TestCalibrationProbeFormat:
@@ -49,12 +49,12 @@ class TestCalibrationProbeContent:
 
     def test_probes_use_span_bracket_format(self):
         """Probes should use [span_0] format matching BATCH_USER in verifier."""
-        from src.calibration import _PROBES
+        from report.calibration import _PROBES
         for probe in _PROBES:
             assert "[span_0]" in probe["user"]
 
     def test_probe_system_mentions_table(self):
         """System prompt should ask for table format, not JSON."""
-        from src.calibration import _PROBE_SYSTEM
+        from report.calibration import _PROBE_SYSTEM
         assert "table" in _PROBE_SYSTEM.lower()
         assert "json" not in _PROBE_SYSTEM.lower()
