@@ -1,6 +1,10 @@
-# Project Verity-H
+# VerityGate
 
-Verity-H is a lightweight evidence-gated LLM verification prototype.
+**Teaching AI to say "I don't know."**
+
+When humans lack knowledge, they admit it: "I'm not sure", "I don't know", "let me check." LLMs often do the opposite. They fill gaps with plausible-sounding assumptions and present them as facts.
+
+VerityGate researches whether a lightweight verification pipeline can enforce more honest behavior: **share what is supported, flag what is missing, and never silently guess.**
 
 The project tests a narrow research question:
 
@@ -266,4 +270,4 @@ tests/                      unit tests
 run_pipeline_batched.py     resumable evaluation runner
 ```
 
-Verity-H is a research harness. Treat results as evidence for design decisions, not as leaderboard claims.
+VerityGate is a research harness. Treat results as evidence for design decisions, not as leaderboard claims.

@@ -1,4 +1,4 @@
-# Project Verity-H Design
+# VerityGate Design
 
 **Status:** lightweight research prototype  
 **Last updated:** April 2026  
@@ -6,7 +6,7 @@
 
 ## 1. Research Goal
 
-Verity-H tests whether a lightweight verification and deterministic gating layer can reduce unsupported claims when an LLM must answer from supplied evidence.
+VerityGate tests whether a lightweight verification and deterministic gating layer can reduce unsupported claims when an LLM must answer from supplied evidence.
 
 The goal is not to make a model omniscient. The goal is to make the answer boundary visible:
 
@@ -19,7 +19,7 @@ The project should stay simple enough to audit. Every non-LLM decision should be
 
 ## 2. Non-Goals
 
-Verity-H intentionally does not include:
+VerityGate intentionally does not include:
 
 - RAG or internet search
 - vector databases
@@ -316,4 +316,4 @@ Next-stage:
 - Supported claims must have evidence pointers.
 - If complexity rises without clear evaluation value, remove it.
 
-Verity-H should remain a clear research artifact: easy to run, easy to audit, and honest about what it can and cannot show.
+VerityGate should remain a clear research artifact: easy to run, easy to audit, and honest about what it can and cannot show.
