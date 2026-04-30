@@ -22,9 +22,11 @@ from .inference_detector import detect_inference
 # Claim text that says "evidence doesn't have X"
 ABSENCE_IN_CLAIM = re.compile(
     r"evidence does not (?:specify|mention|include|contain|provide|state)|"
-    r"not (?:provided|mentioned|specified|stated|included)(?: in the evidence)?|"
+    r"not (?:provided|mentioned|specified|stated|included|listed|documented|shown)(?: in the evidence)?|"
     r"is not provided|is not mentioned|is not specified|"
+    r"is not documented|is not shown|"
     r"no (?:information|data|mention) (?:about|regarding|on|of)|"
+    r"no .{1,60} (?:is |are |were |was )?(?:included|provided|stated|shown|documented)|"
     r"cannot (?:determine|confirm|verify) from|"
     r"not enough information|"
     r"does not contain information|"
@@ -53,6 +55,8 @@ DEFERRAL_IN_EVIDENCE = re.compile(
     r"not (?:been )?finalized|"
     r"still being collected|"
     r"data is (?:still )?being|"
+    r"currently being (?:collected|restructured|reviewed|updated|finalized)|"
+    r"new .{0,40} (?:will be )?available next month|"
     r"please contact|"
     r"contact(?:ed)? (?:the |directly )?.{0,30}(?:desk|office|department)|"
     r"should be contacted|"
@@ -80,6 +84,9 @@ def label_claim_against_spans(
     ct_lower = ct.lower().rstrip(".")
     if _INFERENCE_PHRASES.search(ct):
         return "UNSUPPORTED", None, "claim is an inference/conclusion, not direct evidence"
+
+    if _has_unstated_calculated_percentage(ct, spans):
+        return "UNSUPPORTED", None, "calculated percentage is not explicitly stated in evidence"
 
     # ── 1. Claim says evidence is absent → NOT_IN_EVIDENCE ────────────
     if ABSENCE_IN_CLAIM.search(ct):
@@ -158,6 +165,11 @@ def relabel_claims(
             claim.evidence_pointers = [det_ptr]
             claim.notes = (claim.notes or "") + f" [det: {det_notes}]"
 
+        elif claim.label == "SUPPORTED" and det_label == "UNSUPPORTED":
+            claim.label = "UNSUPPORTED"
+            claim.evidence_pointers = []
+            claim.notes = (claim.notes or "") + f" [det: {det_notes}]"
+
         # Rule 4: inference detection — must come AFTER span match upgrades
         if claim.label == "SUPPORTED" and question:
             is_inf, inf_reason = detect_inference(claim.claim_text, question)
@@ -212,6 +224,27 @@ def _extract_comparable_nums(text: str) -> set[str]:
         if n:
             nums.add(n)
     return nums
+
+
+_PERCENT_RE = re.compile(r"\b\d+(?:\.\d+)?\s*%")
+
+
+def _has_unstated_calculated_percentage(claim_text: str, spans: list[EvidenceSpan]) -> bool:
+    """Flag percentage answers when that percentage is not stated in evidence.
+
+    This keeps explicit percentages supported, but prevents the verifier from
+    accepting arithmetic such as 186 / 240 = 77.5% as if it were textual evidence.
+    """
+    claim_percents = {re.sub(r"\s+", "", p.lower()) for p in _PERCENT_RE.findall(claim_text)}
+    if not claim_percents:
+        return False
+
+    evidence_text = " ".join(span.text for span in spans)
+    evidence_percents = {re.sub(r"\s+", "", p.lower()) for p in _PERCENT_RE.findall(evidence_text)}
+    if claim_percents <= evidence_percents:
+        return False
+
+    return any(word in claim_text.lower() for word in ("percentage", "percent", "passed", "rate"))
 
 
 def _make_pointer(span: EvidenceSpan) -> EvidencePointer:

@@ -76,6 +76,10 @@ def check_contradictions(
     for i in range(len(spans)):
         for j in range(i + 1, len(spans)):
             s_a, s_b = spans[i], spans[j]
+            forced_hit = _check_requested_value_conflict(s_a, s_b, question)
+            if forced_hit:
+                forced.append(forced_hit)
+                continue
             hit = _check_possible_conflict(s_a, s_b)
             if hit:
                 possible.append(hit)
@@ -131,6 +135,101 @@ def _check_possible_conflict(
     # v0.4: Skip — too many false positives. Verifier LLM handles these.
     # Keeping the function structure for future extension.
     return None
+
+
+def _check_requested_value_conflict(
+    s_a: EvidenceSpan,
+    s_b: EvidenceSpan,
+    question: str,
+) -> VerifiedClaim | None:
+    """Force only high-confidence conflicts on the user's requested slot."""
+    q = question.lower()
+    a = s_a.text.lower()
+    b = s_b.text.lower()
+
+    if _is_target_actual_pair(a, b):
+        return None
+
+    if "temperature" in q or "temp" in q:
+        vals_a = _extract_temperature_values(s_a.text)
+        vals_b = _extract_temperature_values(s_b.text)
+        if vals_a and vals_b and vals_a != vals_b and _shared_nouns(s_a.text, s_b.text) >= 1:
+            return _make_contradiction(
+                f"Temperature conflict: {sorted(vals_a)} vs {sorted(vals_b)}",
+                s_a, s_b, "number",
+            )
+
+    if "how many" in q and ("unit" in q or "sold" in q):
+        vals_a = _extract_plain_numbers(s_a.text)
+        vals_b = _extract_plain_numbers(s_b.text)
+        if vals_a and vals_b and vals_a != vals_b and _same_requested_quantity_context(a, b):
+            return _make_contradiction(
+                f"Quantity conflict: {sorted(vals_a)} vs {sorted(vals_b)}",
+                s_a, s_b, "number",
+            )
+
+    if "apartment" in q and ("detail" in q or "listing" in q):
+        conflicts: list[str] = []
+        bedrooms_a, bedrooms_b = _extract_bedrooms(a), _extract_bedrooms(b)
+        sqft_a, sqft_b = _extract_sqft(a), _extract_sqft(b)
+        money_a, money_b = _extract_money(a), _extract_money(b)
+        dates_a, dates_b = _DATE_RE.findall(s_a.text), _DATE_RE.findall(s_b.text)
+        if bedrooms_a and bedrooms_b and bedrooms_a != bedrooms_b:
+            conflicts.append(f"bedrooms {sorted(bedrooms_a)} vs {sorted(bedrooms_b)}")
+        if sqft_a and sqft_b and sqft_a != sqft_b:
+            conflicts.append(f"size {sorted(sqft_a)} vs {sorted(sqft_b)}")
+        if money_a and money_b and money_a != money_b:
+            conflicts.append(f"price {sorted(money_a)} vs {sorted(money_b)}")
+        if dates_a and ("immediate" in a or "immediate" in b):
+            conflicts.append("availability date vs immediate")
+        elif dates_a and dates_b and {d.lower() for d in dates_a} != {d.lower() for d in dates_b}:
+            conflicts.append(f"availability {dates_a} vs {dates_b}")
+        if conflicts and "listing" in a and "listing" in b:
+            return _make_contradiction(
+                "Listing detail conflict: " + "; ".join(conflicts),
+                s_a, s_b, "fact",
+            )
+
+    return None
+
+
+def _is_target_actual_pair(a: str, b: str) -> bool:
+    joined = f"{a} {b}"
+    return "target" in joined and "actual" in joined
+
+
+def _same_requested_quantity_context(a: str, b: str) -> bool:
+    joined = f"{a} {b}"
+    return "sold" in joined and ("dispatched" in joined or "shipped" in joined or "shipping" in joined)
+
+
+def _extract_temperature_values(text: str) -> set[str]:
+    return {
+        re.sub(r"\s+", "", m.group(1).lower())
+        for m in re.finditer(r"\b(\d+(?:\.\d+)?)\s*(?:Â?°\s*c|degrees?\s*c|celsius)\b", text, re.I)
+    }
+
+
+def _extract_plain_numbers(text: str) -> set[str]:
+    nums = set()
+    for m in re.finditer(r"\b\d[\d,]*(?:\.\d+)?\b", text):
+        raw = m.group()
+        if re.search(r"\b(?:19|20)\d{2}\b", raw):
+            continue
+        nums.add(raw.replace(",", ""))
+    return nums
+
+
+def _extract_bedrooms(text: str) -> set[str]:
+    return {m.group(1) for m in re.finditer(r"\b(\d+)\s*[- ]?bedroom", text, re.I)}
+
+
+def _extract_sqft(text: str) -> set[str]:
+    return {m.group(1).replace(",", "") for m in re.finditer(r"\b(\d[\d,]*)\s*sq\s*ft\b", text, re.I)}
+
+
+def _extract_money(text: str) -> set[str]:
+    return {m.group(1).replace(",", "") for m in re.finditer(r"\$\s*(\d[\d,]*(?:\.\d+)?)", text)}
 
 
 def _shared_nouns(a: str, b: str) -> int:

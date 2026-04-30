@@ -1,196 +1,229 @@
-# Project Verity-H v0.4
+# Project Verity-H
 
-**Teaching AI to say "I don't know."**
+Verity-H is a lightweight evidence-gated LLM verification prototype.
 
-When humans lack knowledge, they admit it — "I'm not sure", "I don't know", "let me check." LLMs don't. They fill gaps with plausible-sounding assumptions and present them as facts. Verity-H researches whether a lightweight verification pipeline can enforce honest behavior: **share what you know, flag what you don't, never silently guess.**
+The project tests a narrow research question:
 
-The system lets an LLM answer a question, then **verifies every claim against the provided evidence** before the user sees it. Supported claims pass through. Unsupported claims get flagged. Contradictions get caught. The user sees what's verified vs. what's a guess — like talking to an honest colleague.
+> Can a small verification and gating layer reduce unsupported LLM claims when the model must answer from provided evidence only?
 
-> For the full architecture, research grounding, and design decisions, see **[DESIGN.md](DESIGN.md)**.
+It is not trying to solve truthfulness in general. It does not use retrieval, fine-tuning, classifiers, vector databases, or external knowledge. The goal is a simple, auditable research harness that can be tested across multiple LLM providers with controlled token and latency overhead.
 
----
+For architecture details, see [DESIGN.md](DESIGN.md). For public test-case format, see [docs/test_case_schema.md](docs/test_case_schema.md).
 
-## Quick Start
+## Current Status
 
-```bash
-# Clone
-git clone https://huggingface.co/Sravanth18/verity-h-prototype
-cd verity-h-prototype
+- Two LLM calls per case: writer, then batch verifier.
+- Deterministic post-processing fixes common verifier mistakes.
+- Deterministic gate returns one of:
+  - `accept`
+  - `partial`
+  - `needs_info`
+  - `contradiction`
+  - `hypothesis`
+  - `partial_hypothesis`
+  - `verifier_error`
+- Supported claims must have evidence pointers.
+- Unknowns, contradictions, and hypotheses are shown in the final answer.
+- Current 100 gold cases are a development/debug set, not publication-grade held-out results.
+- A separate 100-case stress set and 24-case key smoke subset are included for diagnostic evaluation.
 
-# Setup
-python -m venv .venv && source .venv/bin/activate
+## Pipeline
+
+```text
+Question + evidence
+    |
+    v
+Split evidence into spans              deterministic
+    |
+    v
+Writer drafts answer                   LLM call 1
+    |
+    v
+Verifier extracts and labels claims    LLM call 2
+    |
+    v
+Deterministic post-processing
+  - claim filtering
+  - span matching
+  - absence/deferral correction
+  - inference detection
+  - conservative contradiction checks
+    |
+    v
+Deterministic gate
+    |
+    v
+Final answer with verification metadata
+```
+
+## Setup
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
 pip install -e ".[test]"
+```
 
-# Run tests (mock mode, no API key needed)
+Run tests in mock mode:
+
+```powershell
 pytest
 ```
 
-## Run Evaluation
+Validate the main development cases:
 
-```bash
-# Set environment
-export LLM_MODE=hf_api
-export HF_API_KEY=your-key-here
-export MODEL_NAME=Qwen/Qwen3-4B-Instruct-2507
-export LLM_CALL_DELAY=2
-
-# Baselines
-python -m src.baseline_runner --mode normal --output results/baseline_normal.jsonl
-python -m src.baseline_runner --mode honesty --output results/baseline_honesty.jsonl
-
-# Pipeline
-python -m src.pipeline_runner --output results/verity_pipeline_v0.4.jsonl
-
-# Batched (resumable if interrupted)
-python run_pipeline_batched.py --delay 0.5 --output results/verity_pipeline_v0.4.jsonl
-
-# Report
-python -m src.report --normal results/baseline_normal.jsonl \
-                     --honesty results/baseline_honesty.jsonl \
-                     --pipeline results/verity_pipeline_v0.4.jsonl \
-                     --output results/report.md
+```powershell
+python -m src.validate_gold_cases
 ```
 
-## How It Works
+Validate the stress cases:
 
-```
-Question + Evidence
-       │
-       ▼
-  1. Split evidence into spans          (deterministic)
-  2. Draft answer                        (LLM call #1)
-  3. Extract + label claims              (LLM call #2)
-  4. Post-process:                       (deterministic)
-     • Filter junk/meta claims
-     • Fix mislabeled claims via span matching
-     • Detect inferential claims (4-tier)
-     • Detect contradictions (status-pair only; numeric/date logged for audit)
-  5. Gate decision                       (deterministic)
-       │
-       ▼
-  Final answer with transparency metadata
+```powershell
+python -m src.validate_gold_cases --cases data\stress_cases_v0.1.jsonl --dataset-version stress_v0.1
+python -m src.validate_gold_cases --cases data\stress_cases_key_24.jsonl --dataset-version stress_key_24
 ```
 
-**2 LLM calls per case.** Everything else is deterministic and auditable.
+## LLM Providers
 
-## Pipeline Decisions
+Set `LLM_MODE` and `MODEL_NAME` in `.env` or the shell.
 
-| Situation | Decision | What user sees |
-|-----------|----------|---------------|
-| All claims verified | `accept` | Clean answer from verified claims |
-| Some claims unverified | `partial` | "What I can verify" + "What I cannot verify" |
-| Status-pair contradiction (open/closed, approved/rejected, etc.) | `contradiction` | Flags conflict, shows both sides |
-| No evidence for the question | `needs_info` | "I don't have enough info" + what's needed |
-| Speculative question (pressure=1) | `hypothesis` | Low-confidence guess with full caveats |
-| Verifier failed to parse | `verifier_error` | Refuses to answer |
+| Mode | Use case |
+|------|----------|
+| `mock` | Tests and local development without API calls |
+| `api` | OpenAI-compatible APIs, including local Ollama |
+| `groq` | Groq API |
+| `hf_api` | Hugging Face Inference API |
+| `nvidia` | NVIDIA NIM / NVIDIA API Catalog |
 
-## Inference Detection (v0.3.1+)
+Examples:
 
-The verifier catches claims the LLM wrongly marks as SUPPORTED:
-
-| Tier | What it catches | Example |
-|------|----------------|---------|
-| 1. Epistemic hedges | "suggests", "consistent with", "most likely" | "Symptoms are *consistent with* bacterial infection" |
-| 2. Logical leaps | "therefore", "based on these findings" | "*Therefore* the patient has strep throat" |
-| 3. Deontic/normative | "should", "recommended", "indicated" | "Antibiotics *should be* started" |
-| 4. Speculative questions | Question asks for judgment/prediction | "Should we invest?" → answer is inherently inferential |
-
-Grounded in: CogniBench (arxiv:2505.20767), GME modality taxonomy (arxiv:2106.08037), BioScope corpus.
-
-## Results (Qwen3-4B, 30 cases, v0.2.1)
-
-| Metric | Baseline Normal | Baseline Honesty | Verity-H |
-|--------|:-:|:-:|:-:|
-| Unsupported claim rate (↓) | 10% | 0% | **0%** |
-| Correct abstention (↑) | 70% | 100% | **100%** |
-| Grounded accept (↑) | 0% | 0% | **100%** |
-| Contradiction detection (↑) | 60% | 40% | **80%** |
-| Pressure hypothesis (↑) | 0% | 0% | **100%** *(v0.2.1)* |
-| False contradiction (↓) | 0% | 0% | **0%** |
-| Partial coverage (↑) | 0% | 0% | **100%** |
-| Latency p50 | 3,525ms | 3,244ms | **6,495ms** *(v0.3, 2-call batch)* |
-
-See [RESULTS_ARCHIVE.md](RESULTS_ARCHIVE.md) for full version history.
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_MODE` | `mock` | `mock` / `api` (OpenAI) / `hf_api` (HuggingFace) |
-| `HF_API_KEY` | — | HuggingFace API key (for `hf_api` mode) |
-| `OPENAI_API_KEY` | — | OpenAI API key (for `api` mode) |
-| `MODEL_NAME` | `Qwen/Qwen3-4B-Instruct-2507` | Model to use |
-| `LLM_TEMPERATURE` | `0.0` | Temperature |
-| `LLM_MAX_TOKENS` | `2048` | Max tokens per response |
-| `LLM_CALL_DELAY` | `2` | Seconds between API calls (rate limiting) |
-| `LLM_MAX_CALLS_PER_MINUTE` | `30` | Per-minute rate limit |
-
-## Gold Cases
-
-100 cases across 6 categories (development set):
-
-| Category | Count | Tests |
-|----------|:-----:|-------|
-| `grounded` | 17 | All claims in evidence → accept |
-| `missing_info` | 14 | Evidence doesn't cover question → abstain |
-| `contradiction` | 15 | Conflicting facts in evidence → flag |
-| `pressure` | 15 | Speculative question → hypothesis with caveats |
-| `filler_trap` | 15 | Tempts model to invent facts → abstain |
-| `partial_answer` | 24 | Some facts available, some not → partial |
-
-**100 total cases — development set only. Not a held-out evaluation.**
-
-## Tests
-
-209 tests covering all modules. Run with `pytest -v`.
-
-```
-tests/
-├── test_calibration.py          # Table-format probe validation
-├── test_claim_filter.py         # Slot-aware relevance filtering
-├── test_constants.py            # Shared stop words
-├── test_contradiction_checks.py # Status-pair contradictions + possible_conflict audit
-├── test_evidence_spans.py       # Abbreviation-aware splitting
-├── test_gate.py                 # All gate rules + edge cases
-├── test_inference_detector.py   # All 4 tiers + exact failure cases
-├── test_metrics.py              # Pipeline + baseline metrics
-├── test_schemas.py              # Pydantic validation
-├── test_span_matcher.py         # Substring/fuzzy/numeric matching
-└── test_verifier.py             # Batch table parser + integration
+```powershell
+# Local Ollama through OpenAI-compatible API
+$env:LLM_MODE="api"
+$env:OPENAI_BASE_URL="http://localhost:11434/v1"
+$env:OPENAI_API_KEY="ollama"
+$env:MODEL_NAME="gemma3:27b"
 ```
 
-## What This Does NOT Do
+```powershell
+# NVIDIA API Catalog
+$env:LLM_MODE="nvidia"
+$env:NVIDIA_API_KEY="your-key"
+$env:MODEL_NAME="nvidia/devstral-small-2507"
+```
 
-- No internet search or retrieval (RAG)
-- No vector databases
+```powershell
+# Groq
+$env:LLM_MODE="groq"
+$env:GROQ_API_KEY="your-key"
+$env:MODEL_NAME="llama-3.3-70b-versatile"
+```
+
+Do not commit `.env` or API keys.
+
+## Running Evaluations
+
+Small key smoke set, recommended before larger runs:
+
+```powershell
+python run_pipeline_batched.py --cases data\stress_cases_key_24.jsonl --output results\ollama_stress_key_24.jsonl --delay 0 --skip-calibration
+python src\report\report.py --pipeline results\ollama_stress_key_24.jsonl --output results\ollama_stress_key_24_report.md
+```
+
+Full stress set:
+
+```powershell
+python run_pipeline_batched.py --cases data\stress_cases_v0.1.jsonl --output results\ollama_stress_v0.1.jsonl --delay 0 --skip-calibration
+python src\report\report.py --pipeline results\ollama_stress_v0.1.jsonl --output results\ollama_stress_v0.1_report.md
+```
+
+Original 100-case development set:
+
+```powershell
+python run_pipeline_batched.py --cases data\gold_cases.jsonl --output results\dev_gold_pipeline.jsonl --delay 0 --skip-calibration
+python src\report\report.py --pipeline results\dev_gold_pipeline.jsonl --output results\dev_gold_report.md
+```
+
+The batched runner is resumable at the output-file level: if an output JSONL already contains completed cases, it skips them.
+
+## Datasets
+
+| File | Purpose |
+|------|---------|
+| `data/gold_cases.jsonl` | 100-case development/debug set |
+| `data/gold_cases_set1.jsonl` | Split of the development set |
+| `data/gold_cases_set2.jsonl` | Split of the development set |
+| `data/stress_cases_v0.1.jsonl` | 100-case diagnostic stress set |
+| `data/stress_cases_key_24.jsonl` | 24-case high-value smoke/stress subset |
+| `data/case_template.json` | Example case object for contributors |
+| `docs/test_case_schema.md` | Public case schema and methodology notes |
+
+Development and stress results should be reported separately. Do not tune code after looking at a held-out set unless the case is moved to development/stress and replaced.
+
+## Current Deterministic Checks
+
+The deterministic layer intentionally stays small:
+
+- Evidence span matching by substring, number+keyword match, and fuzzy keyword overlap with strict numeric consistency.
+- Absence and deferral detection, such as `not provided`, `not documented`, `not shown`, `pending`, or `not finalized`.
+- Calculated percentage guard: unstated computed percentages should not be accepted as supported facts.
+- Inference detection for hedges, logical leaps, recommendations, predictions, diagnoses, and other speculative claims.
+- Conservative contradiction checks:
+  - obvious status-pair conflicts
+  - selected requested-slot value conflicts where the question and evidence make the shared slot clear
+- Draft-level safety checks:
+  - if the draft says the answer is missing, do not accept side facts as a clean answer
+  - if the draft says the evidence conflicts, route to contradiction
+  - for multi-slot questions, if the draft says one requested slot is missing, do not accept only the supported slots
+
+These checks are intentionally auditable regex/string rules, not a hidden classifier.
+
+## What This Does Not Do
+
+- No internet search
+- No RAG
+- No vector database
 - No fine-tuning
 - No UI or deployment
-- No GPU required
+- No publication-grade benchmark claim yet
 
-This is a **research harness**, not a product.
+## Known Limitations
 
-## Known Limitations (v0.4)
+- The current gold and stress cases are diagnostic. They are useful for engineering, not final scientific claims.
+- Semantic relevance is still limited. The system can miss cases where evidence is related but not actually sufficient.
+- Numeric/date/money contradiction detection is conservative to avoid false positives.
+- The verifier is still model-dependent: stronger LLMs extract cleaner absence and partial-answer claims.
+- Final-answer wording for synthetic unknowns can be broad when the verifier drops a specific missing slot.
+- Single-document evidence only; no source ranking or evidence precedence.
 
-The v0.4 baseline intentionally trades some detection for **zero false positives** and **maintainable code**.
+## Recommended Evaluation Sequence
 
-| # | Limitation | Why | Mitigation |
-|---|-----------|-----|------------|
-| 1 | **Numeric contradictions not caught deterministically** | Money/percentage/count/date conflicts have too many false positives (e.g., revenue target vs actual revenue). | Relies on verifier LLM. If LLM misses, contradiction is not flagged. |
-| 2 | **Semantic relevance not enforced** | "How fast can the car go?" with only engine specs supported → `accept`. v0.3.2 had a 20-entry synonym-table guard but it was too rule-heavy for a baseline. | Acceptable for v0.4. Future: semantic similarity check (not synonym table). |
-| 3 | **100 cases = dev set only** | The deterministic rules were tuned against failures on this set. Results are directional, not publication-grade. | Create held-out 50-case test set for unbiased validation. |
-| 4 | **Inference detector is regex-based** | Covers common hedges but cannot catch all inferential reasoning. | Grounded in CogniBench + GME + BioScope; handles most common cases. |
-| 5 | **Single evidence document** | No multi-document consensus or evidence weighting. | Designed for single-pass evaluation. |
+1. Run `pytest`.
+2. Run `python -m src.validate_gold_cases`.
+3. Run the 24-case key smoke set.
+4. If the smoke result is sane, run the 100-case stress set.
+5. Only after the design stabilizes, create a held-out set and run it once.
 
-## Next Steps
+## Repo Structure
 
-- [x] Simplify to v0.4 baseline — status-pair contradictions only, no frame detector
-- [x] Remove slot-mismatch guard (semantic relevance is known limitation)
-- [x] 209 tests pass, zero false contradictions
-- [ ] Run v0.4 eval on full 100-case development set
-- [ ] Test on multiple models (1B, 4B, 70B+) to prove model independence
-- [ ] Create held-out 50-case test set for unbiased evaluation
-- [ ] Confidence calibration analysis
+```text
+data/                       evaluation cases and templates
+docs/                       public schema and methodology docs
+results/                    local run outputs
+src/
+  baseline_runner.py        baseline prompts
+  claim_filter.py           claim cleanup and relevance filtering
+  contradiction_checks.py   deterministic contradiction checks
+  evidence_spans.py         evidence splitting
+  gate.py                   deterministic gate
+  inference_detector.py     inference/speculation detection
+  llm_client.py             provider clients
+  pipeline_runner.py        pipeline orchestration
+  span_matcher.py           deterministic relabeling
+  validate_gold_cases.py    dataset validation
+  verifier.py               batch verifier prompt and parser
+tests/                      unit tests
+run_pipeline_batched.py     resumable evaluation runner
+```
 
----
-
-*See [DESIGN.md](DESIGN.md) for the full architecture document.*
+Verity-H is a research harness. Treat results as evidence for design decisions, not as leaderboard claims.

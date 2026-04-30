@@ -67,8 +67,8 @@ class TestForcedStatusPairContradictions:
         assert len(result.forced) >= 1
 
 
-class TestPossibleConflictsLoggedOnly:
-    """Numeric/date/money conflicts are logged, NOT forced into gate."""
+class TestRequestedValueConflicts:
+    """Numeric/date/money conflicts are forced only for requested slots."""
 
     def test_date_conflict_not_forced(self):
         """Date conflicts may appear in possible, but NOT forced."""
@@ -81,14 +81,14 @@ class TestPossibleConflictsLoggedOnly:
         # They may appear in possible for audit.
         assert len(result.forced) == 0
 
-    def test_numeric_conflict_not_forced(self):
-        """Numeric value conflicts are NOT forced."""
+    def test_numeric_conflict_for_requested_units_forced(self):
+        """Requested units-sold conflicts are forced."""
         spans = [
             _span("span_0", "The sales report states 1,200 units were sold."),
             _span("span_1", "Warehouse log shows 980 units dispatched.", start=60),
         ]
         result = check_contradictions(spans, "How many units were sold?")
-        assert len(result.forced) == 0
+        assert len(result.forced) >= 1
 
     def test_money_conflict_not_forced(self):
         """Money conflicts are NOT forced."""
@@ -99,14 +99,30 @@ class TestPossibleConflictsLoggedOnly:
         result = check_contradictions(spans, "What is the revenue?")
         assert len(result.forced) == 0
 
-    def test_temperature_conflict_not_forced(self):
-        """Temperature conflicts are NOT forced."""
+    def test_temperature_conflict_for_requested_temperature_forced(self):
+        """Requested temperature conflicts are forced."""
         spans = [
             _span("span_0", "Sensor A recorded 23.5 degrees C."),
             _span("span_1", "Sensor B recorded 28.1 degrees C.", start=50),
         ]
         result = check_contradictions(spans, "What is the temperature?")
-        assert len(result.forced) == 0
+        assert len(result.forced) >= 1
+
+    def test_temperature_conflict_with_mojibake_degree_symbol_forced(self):
+        spans = [
+            _span("span_0", "Sensor A recorded 23.5Â°C at noon."),
+            _span("span_1", "Sensor B recorded 28.1Â°C at noon.", start=50),
+        ]
+        result = check_contradictions(spans, "What temperature was recorded?")
+        assert len(result.forced) >= 1
+
+    def test_apartment_listing_detail_conflict_forced(self):
+        spans = [
+            _span("span_0", "The apartment listing on the agency website shows a 2-bedroom apartment at 850 sq ft for $2,100/month."),
+            _span("span_1", "The same listing on the aggregator site shows 3 bedrooms at 920 sq ft for $2,350/month.", start=120),
+        ]
+        result = check_contradictions(spans, "What are the details of the apartment listing?")
+        assert len(result.forced) >= 1
 
     def test_percentage_conflict_not_forced(self):
         """Percentage conflicts are NOT forced."""

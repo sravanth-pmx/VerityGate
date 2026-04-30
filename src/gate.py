@@ -23,13 +23,19 @@ _UNKNOWN_LABELS = {"UNSUPPORTED", "NEEDS_INFO", "NOT_IN_EVIDENCE"}
 _DRAFT_CONFLICT_RE = re.compile(
     r"\b(conflicting|conflict|conflicts|discrepancy|discrepancies|"
     r"inconsistent|inconsistency|two different|different sources|"
-    r"unclear which|do not match)\b",
+    r"unclear which|do not match)\b|"
+    r"\b(?:no|not|does not provide a)\s+(?:single,?\s+)?consistent answer\b|"
+    r"\bnot\s+consistent\b",
     re.IGNORECASE,
 )
 _DRAFT_MISSING_ANSWER_RE = re.compile(
     r"("
+    r"(?:evidence|source|sources|document|documents)\s+does\s+not\s+"
+    r"(?:answer|mention|include|specify|state|provide|cover|address)|"
+    r"there\s+is\s+no\s+information\s+about\s+whether|"
+    r"no\s+information\s+about\s+whether|"
     r"doesn['’]?t\s+(?:mention|include|specify|state|provide)|"
-    r"not\s+(?:mentioned|included|specified|stated|provided)|"
+    r"not\s+(?:mentioned|included|specified|stated|provided|documented|shown)|"
     r"no\s+(?:information|data|evidence)\s+(?:about|on|for)|"
     r"don't\s+have\s+(?:enough\s+)?information|"
     r"do\s+not\s+have\s+(?:enough\s+)?information|"
@@ -73,21 +79,8 @@ def apply_gate(
     # If the draft itself says the evidence conflicts, do not allow a clean accept.
     # This protects cases where the verifier extracts both sides as SUPPORTED
     # but fails to label CONTRADICTS_EVIDENCE.
-    if _draft_signals_conflict(draft_answer) and supported and not contradicted:
-        return GateOutput(
-            final_answer=(
-                "The draft answer indicates there is conflicting or inconsistent "
-                "information in the evidence, so I should not give a single clean "
-                "answer.\n\n"
-                f"What I can verify:\n{_fmt_list(supported)}\n\n"
-                "I recommend checking which source should take precedence."
-            ),
-            decision="contradiction",
-            included_claims=[c.claim_text for c in supported],
-            unknown_claims=[c.claim_text for c in unknown],
-            contradicted_claims=["Draft answer indicated conflicting evidence."],
-            hypothesis_claims=[],
-        )
+    if _draft_signals_conflict(draft_answer) and not contradicted:
+        return _make_draft_conflict_output(supported, unknown)
 
     # ── Rule 1: contradiction present (always wins) ───────────────────
     if contradicted:
@@ -132,6 +125,10 @@ def apply_gate(
             gate_unknown = [_make_gate_missing_claim(question)]
             if pressure_level == 1 and _is_speculative(question):
                 return _make_partial_hypothesis_output(supported, gate_unknown, question)
+            return _make_partial_output(supported, gate_unknown)
+
+        if _draft_signals_missing_slot(draft_answer, question, supported):
+            gate_unknown = [_make_gate_missing_claim(question)]
             return _make_partial_output(supported, gate_unknown)
 
         # For pressure=1 speculative questions, do not present a speculative
@@ -197,6 +194,24 @@ def apply_gate(
         )
 
     # ── Fallback: no claims at all ───────────────────────────────────
+    if _draft_signals_missing_answer(draft_answer):
+        gate_unknown = [_make_gate_missing_claim(question)]
+        if pressure_level == 1 and _is_speculative(question):
+            return _make_hypothesis_output(
+                supported=[], unknown=gate_unknown, question=question, has_support=False,
+            )
+        missing = _missing(gate_unknown)
+        return GateOutput(
+            final_answer=(
+                "Honestly, I don't have enough information to answer this one. "
+                "The evidence provided doesn't really cover what you're asking about.\n\n"
+                f"To help you out, I'd need:\n{missing}"
+            ),
+            decision="needs_info",
+            included_claims=[], unknown_claims=[c.claim_text for c in gate_unknown],
+            contradicted_claims=[], hypothesis_claims=[],
+        )
+
     return GateOutput(
         final_answer=(
             "I wasn't able to extract any verifiable claims from this. "
@@ -214,6 +229,31 @@ def _draft_signals_missing_answer(draft_answer: str) -> bool:
     """Return True when the draft itself says the requested answer is missing."""
     return bool(_DRAFT_MISSING_ANSWER_RE.search(draft_answer or ""))
 
+def _draft_signals_missing_slot(
+    draft_answer: str,
+    question: str,
+    supported: list[VerifiedClaim],
+) -> bool:
+    """Return True when a multi-slot draft includes an unsupported absence slot.
+
+    Some models answer list-style questions as:
+    "Medication: X. Allergies: not documented."
+    If the verifier/filter drops the absence line, the remaining supported slots
+    must not become a clean accept.
+    """
+    if not _is_multi_slot_question(question):
+        return False
+
+    draft = draft_answer or ""
+    if not _DRAFT_MISSING_ANSWER_RE.search(draft):
+        return False
+
+    supported_text = " ".join(c.claim_text for c in supported).lower()
+    for slot, value in _extract_colon_slots(draft):
+        if _DRAFT_MISSING_ANSWER_RE.search(value) and slot.lower() not in supported_text:
+            return True
+    return False
+
 def _draft_signals_conflict(draft_answer: str) -> bool:
     """Return True when draft itself says evidence conflicts."""
     return bool(_DRAFT_CONFLICT_RE.search(draft_answer or ""))
@@ -229,9 +269,52 @@ def _make_gate_missing_claim(question: str) -> VerifiedClaim:
         notes="Added by gate because draft answer indicated missing evidence.",
     )
 
+def _make_draft_conflict_output(
+    supported: list[VerifiedClaim],
+    unknown: list[VerifiedClaim],
+) -> GateOutput:
+    """Route explicit draft conflict signals to contradiction even after claim loss."""
+    final = (
+        "The draft answer indicates there is conflicting or inconsistent "
+        "information in the evidence, so I should not give a single clean answer."
+    )
+    if supported:
+        final += f"\n\nWhat I can verify:\n{_fmt_list(supported)}"
+    if unknown:
+        final += f"\n\nWhat I cannot verify:\n{_fmt_list(unknown)}"
+    final += "\n\nI recommend checking which source should take precedence."
+
+    return GateOutput(
+        final_answer=final,
+        decision="contradiction",
+        included_claims=[c.claim_text for c in supported],
+        unknown_claims=[c.claim_text for c in unknown],
+        contradicted_claims=["Draft answer indicated conflicting evidence."],
+        hypothesis_claims=[],
+    )
+
 def _clean(text: str) -> str:
     """Strip trailing punctuation to avoid double periods."""
     return re.sub(r"[.!?,;:\s]+$", "", text.strip())
+
+def _is_multi_slot_question(question: str) -> bool:
+    """Detect list-style questions with multiple requested answer slots."""
+    q = (question or "").lower()
+    return bool(re.search(r"\bwhat are\b", q) and ("," in q or " and " in q))
+
+
+def _extract_colon_slots(text: str) -> list[tuple[str, str]]:
+    """Extract simple 'Slot: value' lines from draft answers."""
+    slots: list[tuple[str, str]] = []
+    slot_re = re.compile(
+        r"([A-Za-z][A-Za-z0-9 /_-]{1,50})\s*:\s*"
+        r"(.+?)(?=\s+[A-Za-z][A-Za-z0-9 /_-]{1,50}\s*:|$)"
+    )
+    for raw_line in re.split(r"[\r\n]+", text or ""):
+        line = raw_line.strip(" -\t")
+        for match in slot_re.finditer(line):
+            slots.append((match.group(1).strip(), match.group(2).strip()))
+    return slots
 
 
 def _dedup_texts(texts: list[str]) -> list[str]:

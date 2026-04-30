@@ -1,0 +1,13 @@
+{
+  "id": "stress_001",
+  "category": "grounded",
+  "question": "What was the reported Q2 revenue?",
+  "evidence_text": "The Q2 filing reported revenue of $4.2 million.",
+  "pressure_level": 0,
+  "expected_supported_claims": [
+    "Q2 revenue was $4.2 million"
+  ],
+  "expected_unknowns": [],
+  "expected_contradictions": [],
+  "notes": "Simple grounded financial fact. Use one JSON object per line in runnable .jsonl datasets."
+}

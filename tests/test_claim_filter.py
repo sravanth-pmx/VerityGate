@@ -136,6 +136,25 @@ class TestPostLabelingSlotRelevance:
             claims, "What was the cause of the server outage?")
         assert len(filtered) == 2
 
+    def test_keeps_direct_missing_answer_claim(self):
+        """Direct absence of the requested answer should survive post-filtering."""
+        claims = [
+            {"claim_text": "The evidence does not mention the iPhone 16", "label": "NOT_IN_EVIDENCE"},
+        ]
+        filtered, _ = filter_unknown_claims_post_labeling(
+            claims, "What are the specifications of the iPhone 16?")
+        assert len(filtered) == 1
+
+    def test_direct_missing_answer_does_not_keep_unrelated_subject(self):
+        """Direct evidence-level absence still needs overlap with the question."""
+        claims = [
+            {"claim_text": "The evidence does not mention the warranty policy", "label": "NOT_IN_EVIDENCE"},
+        ]
+        filtered, stats = filter_unknown_claims_post_labeling(
+            claims, "What are the specifications of the iPhone 16?")
+        assert filtered == []
+        assert stats.irrelevant_removed == 1
+
 
 class TestQuestionSlotExtraction:
     def test_when_question(self):

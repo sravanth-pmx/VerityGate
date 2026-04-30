@@ -93,7 +93,7 @@ _SPECULATIVE_QUESTION = re.compile(
     # Normative / recommendation
     r"^should\s+(?:we|the|he|she|they|i|this|school|company|team)\b|"
     # Predictive
-    r"^will\s+(?:the|this|it|we|they|he|she)\b|"
+    r"^will\b|"
     # Causal inference
     r"^what\s+(?:caused|is causing|causes|explains|led to|is the (?:most )?likely (?:cause|diagnosis))\b|"
     # Diagnostic / legal / judgment

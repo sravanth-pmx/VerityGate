@@ -50,6 +50,10 @@ Labels:
 
 CRITICAL: When the draft says something is NOT in the evidence (e.g., "not mentioned", "not provided", "the evidence does not say"), you MUST label it NOT_IN_EVIDENCE, not UNSUPPORTED. NOT_IN_EVIDENCE means the information is absent from the source; UNSUPPORTED means the draft made an unsupported assertion.
 
+If the draft answer says the requested information is missing, not mentioned, not provided, not specified, unavailable, unknown, or not in the evidence, you must extract that missing-answer statement as a NOT_IN_EVIDENCE row.
+
+Do not skip absence claims. A missing requested answer is still a claim that must be labeled NOT_IN_EVIDENCE.
+
 Only list missing information that directly answers the user's requested slot.
 Do not list related-but-unasked missing details.
 

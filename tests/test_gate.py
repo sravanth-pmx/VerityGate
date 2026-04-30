@@ -58,6 +58,32 @@ class TestContradiction:
         out = apply_gate("q?", "draft", vo, pressure_level=1, spans=[_span()])
         assert out.decision == "contradiction"
 
+    def test_draft_conflict_with_no_claims_routes_contradiction(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "When did the CEO resign?",
+            "The evidence contains conflicting information about the resignation date.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "contradiction"
+        assert out.contradicted_claims == ["Draft answer indicated conflicting evidence."]
+
+    def test_no_single_consistent_answer_routes_contradiction(self):
+        vo = VerifierOutput(claims=[
+            _claim("c1", "SUPPORTED", pointers=[_pointer()]),
+            _claim("c2", "SUPPORTED", pointers=[_pointer()]),
+        ])
+        out = apply_gate(
+            "How many units were sold?",
+            "The evidence does not provide a single, consistent answer.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "contradiction"
+
 
 class TestNeedsInfo:
     def test_pressure_0_no_hypothesis(self):
@@ -163,6 +189,84 @@ class TestPartial:
         assert "What I can verify" in out.final_answer
         assert "What I cannot verify" in out.final_answer
 
+    def test_multislot_dropped_missing_slot_blocks_accept(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="Medication: lisinopril",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="Dosage: 10mg once daily",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "What are the patient's medication, dosage, and allergies?",
+            "Medication: lisinopril\nDosage: 10mg once daily\nAllergies: not documented in transferred records",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "partial"
+        assert out.unknown_claims
+
+    def test_multislot_inline_missing_slot_blocks_accept(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="Item price is $48.00",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="Tax is $3.84",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c3", claim_text="Shipping cost is waived",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "What are the item price, tax, and shipping cost?",
+            "Item price: $48.00 Tax: $3.84 Shipping cost: Waived (original fee not shown)",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "partial"
+        assert out.unknown_claims
+
+    def test_multislot_complete_slot_answer_can_accept(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="Item price is $48.00",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="Tax is $3.84",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c3", claim_text="Shipping cost is waived",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "What are the item price, tax, and shipping cost?",
+            "Item price: $48.00 Tax: $3.84 Shipping cost: Waived",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "accept"
+
 
 class TestVerifierError:
     def test_parse_error(self):
@@ -234,3 +338,38 @@ class TestFallback:
         vo = VerifierOutput(claims=[])
         out = apply_gate("q?", "draft", vo, pressure_level=0, spans=[_span()])
         assert out.decision == "needs_info"
+
+    def test_no_claims_missing_answer_preserved(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "What are the specifications?",
+            "The evidence does not mention the requested specifications.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "needs_info"
+        assert out.unknown_claims
+
+    def test_no_claims_missing_answer_under_pressure_routes_hypothesis(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "Will the product launch be successful?",
+            "The evidence does not answer the question.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"
+        assert out.hypothesis_claims
+
+    def test_no_information_about_whether_preserved_under_pressure(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "Will artificial general intelligence be achieved by 2030?",
+            "There is no information about whether AGI will be achieved by 2030.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"

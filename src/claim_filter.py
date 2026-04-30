@@ -183,6 +183,9 @@ def filter_unknown_claims_post_labeling(
 
         # Relevance check for unknown claims
         if label in ("UNSUPPORTED", "NEEDS_INFO", "NOT_IN_EVIDENCE"):
+            if label == "NOT_IN_EVIDENCE" and _is_direct_missing_answer_claim(ct, q_keywords):
+                result.append(c)
+                continue
             if not _is_slot_relevant(ct, q_slots, q_keywords):
                 stats.irrelevant_removed += 1
                 continue
@@ -270,6 +273,33 @@ def _extract_missing_subject(text: str) -> str:
         if m:
             return m.group(1).strip()
     return ""
+
+
+def _is_direct_missing_answer_claim(
+    claim_text: str,
+    question_keywords: set[str],
+) -> bool:
+    """Keep absence claims that directly say the evidence lacks the answer.
+
+    This catches verifier rows such as "The evidence does not mention the
+    iPhone 16" without weakening the slot filter for ordinary missing details
+    like "The launch location is not mentioned".
+    """
+    if not question_keywords:
+        return False
+
+    text = claim_text.lower()
+    if not re.search(r"\b(?:evidence|source|sources|document|documents|record|records)\b", text):
+        return False
+    if not re.search(
+        r"\b(?:does not|do not|doesn't|don't|did not|didn't|not)\s+"
+        r"(?:mention|answer|provide|specify|state|say|contain|include|cover|address)\b",
+        text,
+    ):
+        return False
+
+    claim_keywords = _extract_keywords(claim_text)
+    return bool(claim_keywords & question_keywords)
 
 def _is_broad_question(question: str) -> bool:
     """Broad summary/detail questions should allow grounded facts from the draft.

@@ -38,6 +38,47 @@ class TestLabelClaimAgainstSpans:
             "The budget has not been finalized", spans)
         assert label == "NOT_IN_EVIDENCE"
 
+    def test_not_listed_not_in_evidence(self):
+        spans = [_span("Current medications are not listed.")]
+        label, ptr, _ = label_claim_against_spans(
+            "Current medications are not listed in the evidence", spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_not_documented_not_in_evidence(self):
+        spans = [_span("The allergy section says not documented in transferred records.")]
+        label, ptr, _ = label_claim_against_spans(
+            "Allergies are not documented in transferred records", spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_not_shown_not_in_evidence(self):
+        spans = [_span("Shipping cost is waived but the original shipping fee is not shown.")]
+        label, ptr, _ = label_claim_against_spans(
+            "The original shipping fee is not shown", spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_no_slot_included_not_in_evidence(self):
+        spans = [_span("No vote totals are included.")]
+        label, ptr, _ = label_claim_against_spans(
+            "No vote totals are included in the evidence", spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_supported_included_fact_stays_supported(self):
+        spans = [_span("The package included a power adapter and cable.")]
+        label, ptr, _ = label_claim_against_spans(
+            "The package included a power adapter", spans)
+        assert label == "SUPPORTED"
+        assert ptr is not None
+
+    def test_currently_restructured_not_in_evidence(self):
+        spans = [_span("Personal training rates are currently being restructured.")]
+        label, ptr, _ = label_claim_against_spans(
+            "Personal training rates are currently being restructured", spans)
+        assert label == "NOT_IN_EVIDENCE"
+
     def test_no_match_returns_empty(self):
         spans = [_span("The sky is blue.")]
         label, ptr, _ = label_claim_against_spans("The defendant is guilty", spans)
@@ -108,6 +149,19 @@ class TestNumericConsistency:
         label, ptr, _ = label_claim_against_spans(
             "Q3 revenue was $5.0 million", spans)
         assert label != "SUPPORTED"
+
+    def test_unstated_calculated_percentage_not_supported(self):
+        spans = [_span("The exam was taken by 240 students. 186 students scored 70 or above.")]
+        label, ptr, _ = label_claim_against_spans(
+            "77.5% of students passed the exam", spans)
+        assert label == "UNSUPPORTED"
+        assert ptr is None
+
+    def test_stated_percentage_still_supported(self):
+        spans = [_span("77.5% of students passed the exam.")]
+        label, ptr, _ = label_claim_against_spans(
+            "77.5% of students passed the exam", spans)
+        assert label == "SUPPORTED"
 
     def test_no_numbers_in_claim_still_matches(self):
         """Text-only claim with keyword match → SUPPORTED (no numbers to check)."""
