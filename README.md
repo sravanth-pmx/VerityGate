@@ -270,4 +270,12 @@ tests/                      unit tests
 run_pipeline_batched.py     resumable evaluation runner
 ```
 
+## License
+
+VerityGate is released under the Apache License 2.0.
+
+You can use, modify, and distribute it, including for commercial use, subject to the Apache-2.0 license terms.
+
+This project is a lightweight research prototype. It does not provide legal, medical, financial, or compliance advice, and it should be evaluated carefully before production use.
+
 VerityGate is a research harness. Treat results as evidence for design decisions, not as leaderboard claims.
