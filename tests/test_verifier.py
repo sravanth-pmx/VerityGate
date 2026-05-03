@@ -33,6 +33,15 @@ class TestParseBatchTable:
         claims, mc, mp = _parse_batch_table(raw, spans)
         assert len(claims) == 2
 
+    def test_bare_pipe_format(self):
+        spans = [_span("span_0", "Northstar Devices won the laptop contract.")]
+        raw = "SUPPORTED | Northstar Devices won the laptop contract | span_0"
+        claims, mc, mp = _parse_batch_table(raw, spans)
+        assert len(claims) == 1
+        assert mc == 0
+        assert claims[0].label == "SUPPORTED"
+        assert claims[0].evidence_pointers[0].span_id == "span_0"
+
     def test_bad_span_id_downgrades_supported(self):
         spans = [_span("span_0", "test")]
         raw = "1. SUPPORTED | Some claim here | span_99"

@@ -84,6 +84,29 @@ class TestContradiction:
         )
         assert out.decision == "contradiction"
 
+    def test_supported_status_opposites_route_contradiction(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="Remote work is allowed for this role",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="Remote work is not allowed for this role",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "Is remote work allowed for this role?",
+            "Remote work is not allowed for this role.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "contradiction"
+        assert out.contradicted_claims
+
 
 class TestNeedsInfo:
     def test_pressure_0_no_hypothesis(self):
@@ -240,6 +263,64 @@ class TestPartial:
         assert out.decision == "partial"
         assert out.unknown_claims
 
+    def test_multislot_missing_data_blocks_accept(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="The laptop has an Intel i7 CPU",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="The laptop has 16GB RAM",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "What are the laptop CPU, RAM, and battery life?",
+            "Intel i7 CPU, 16GB RAM. Battery life data is missing.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "partial"
+        assert out.unknown_claims
+
+    def test_computed_scalar_answer_blocks_accept_when_total_not_stated(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="40 employees attended the morning session",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="35 employees attended the afternoon session",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c3", claim_text="12 people attended both sessions",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        spans = [_span(
+            text=(
+                "The event note says 40 employees attended the morning session "
+                "and 35 attended the afternoon session. It also says 12 people "
+                "attended both sessions."
+            )
+        )]
+        out = apply_gate(
+            "How many people attended in total?",
+            "Total unique attendees = 40 + 35 - 12 = 63",
+            vo,
+            pressure_level=0,
+            spans=spans,
+        )
+        assert out.decision == "partial"
+        assert out.unknown_claims
+
     def test_multislot_complete_slot_answer_can_accept(self):
         vo = VerifierOutput(claims=[
             VerifiedClaim(
@@ -274,6 +355,7 @@ class TestVerifierError:
         out = apply_gate("q?", "draft", vo, pressure_level=0, spans=[_span()])
         assert out.decision == "verifier_error"
         assert "hypothesis" not in out.final_answer.lower()
+        assert "may still be correct" in out.final_answer
 
     def test_parse_error_at_pressure_1(self):
         vo = VerifierOutput(claims=[], parse_error=True)
@@ -373,3 +455,51 @@ class TestFallback:
             spans=[_span()],
         )
         assert out.decision == "hypothesis"
+
+    def test_no_claims_pending_analysis_under_pressure_routes_hypothesis(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "Is the new therapy effective?",
+            "The trial summary reports a symptom-score reduction, but statistical significance analysis is pending.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"
+        assert out.hypothesis_claims
+
+    def test_no_claims_missing_scores_under_pressure_routes_hypothesis(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "Will the grant proposal be accepted?",
+            "The internal review score is 87 out of 100. The funder's selection criteria and competitor scores are missing.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"
+        assert out.hypothesis_claims
+
+    def test_no_claims_terse_missing_under_pressure_routes_hypothesis(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "Should we approve the mortgage application?",
+            "Missing: bank's approval threshold and underwriting exceptions.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"
+        assert out.hypothesis_claims
+
+    def test_no_claims_not_confirmed_under_pressure_routes_hypothesis(self):
+        vo = VerifierOutput(claims=[])
+        out = apply_gate(
+            "What diagnosis best explains the symptoms?",
+            "Missing. Diagnosis not confirmed.",
+            vo,
+            pressure_level=1,
+            spans=[_span()],
+        )
+        assert out.decision == "hypothesis"
+        assert out.hypothesis_claims

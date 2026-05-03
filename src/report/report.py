@@ -1,6 +1,6 @@
 """
 File: src/report/report.py
-Purpose: This script serves as the high-level research reporting tool for the Verity-H project. 
+Purpose: This script serves as the high-level research reporting tool for VerityGate.
 It aggregates performance metrics across three different evaluation runs: Baseline Normal, 
 Baseline Honesty, and the Verity-H Pipeline. By comparing these results, it calculates 
 key research indicators such as unsupported claim rates, correct abstention rates, and 
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from pathlib import Path
+import sys
 
 from src import config
 from src.report.metrics import MetricSet, compute_baseline_metrics, compute_pipeline_metrics
@@ -85,6 +86,25 @@ def _aggregate_filter_stats(results: list[PipelineResult]) -> dict[str, int]:
                 if isinstance(v, int):
                     totals[k] = totals.get(k, 0) + v
     return totals
+
+def _resolve_dataset_version(
+    dataset_version: str,
+    pipeline: list[PipelineResult],
+    pipeline_path: Path | None,
+) -> str:
+    """Resolve report dataset label without silently mislabeling stress runs as dev."""
+    if dataset_version:
+        return dataset_version
+
+    if pipeline_path:
+        name = pipeline_path.name.lower()
+        if "stress_v0.1" in name:
+            return "stress_v0.1"
+
+    if pipeline and all(r.case_id.startswith("stress_") for r in pipeline):
+        return "stress_v0.1"
+
+    return config.DATASET_VERSION
     
 def generate_report(
     normal_path: Path | None = None,
@@ -104,14 +124,19 @@ def generate_report(
     d_n = m_normal.as_dict()
     d_h = m_honesty.as_dict()
     d_p = m_pipeline.as_dict()
+    resolved_dataset_version = _resolve_dataset_version(
+        dataset_version=dataset_version,
+        pipeline=pipeline,
+        pipeline_path=pipeline_path,
+    )
 
-    header = f"| {'Metric':<45} | {'Baseline Normal':>16} | {'Baseline Honesty':>17} | {'Verity-H Pipeline':>18} |"
+    header = f"| {'Metric':<45} | {'Baseline Normal':>16} | {'Baseline Honesty':>17} | {'VerityGate Pipeline':>18} |"
     sep = f"|{'-'*47}|{'-'*18}|{'-'*19}|{'-'*20}|"
 
     rows = [
-        "# Project Verity-H v0.3 — Evaluation Report",
+        "# VerityGate Evaluation Report",
         "",
-        f"Dataset version: {dataset_version or config.DATASET_VERSION}",
+        f"Dataset version: {resolved_dataset_version}",
         "",
         f"Cases: normal={len(normal)}, honesty={len(honesty)}, pipeline={len(pipeline)}",
         "",
@@ -213,8 +238,8 @@ def generate_report(
     rows.append("## Notes")
     rows.append("- Baseline metrics are **heuristic** (text pattern matching).")
     rows.append("- Pipeline metrics use structured verifier + gate outputs.")
-    rows.append(f"- Dataset version: `{dataset_version or config.DATASET_VERSION}` — **development benchmark, not held-out evaluation.**")
-    rows.append("- Do not claim publication-grade numbers from this dev set.")
+    rows.append(f"- Dataset version: `{resolved_dataset_version}`.")
+    rows.append("- Current dev and stress datasets are diagnostic, not held-out publication benchmarks.")
     rows.append("")
 
     return "\n".join(rows)
@@ -229,17 +254,22 @@ def _fmt(val: float, key: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Verity-H report")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    parser = argparse.ArgumentParser(description="Generate VerityGate report")
     parser.add_argument("--normal", type=str, default=None, help="Path to baseline_normal.jsonl")
     parser.add_argument("--honesty", type=str, default=None, help="Path to baseline_honesty.jsonl")
     parser.add_argument("--pipeline", type=str, default=None, help="Path to verity_pipeline.jsonl")
     parser.add_argument("--output", type=str, default=None, help="Output report path")
+    parser.add_argument("--dataset-version", type=str, default="", help="Dataset/version label for the report")
     args = parser.parse_args()
 
     report = generate_report(
         normal_path=Path(args.normal) if args.normal else None,
         honesty_path=Path(args.honesty) if args.honesty else None,
         pipeline_path=Path(args.pipeline) if args.pipeline else None,
+        dataset_version=args.dataset_version,
     )
     print(report)
 

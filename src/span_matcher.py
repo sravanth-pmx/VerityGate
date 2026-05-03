@@ -22,9 +22,13 @@ from .inference_detector import detect_inference
 # Claim text that says "evidence doesn't have X"
 ABSENCE_IN_CLAIM = re.compile(
     r"evidence does not (?:specify|mention|include|contain|provide|state)|"
-    r"not (?:provided|mentioned|specified|stated|included|listed|documented|shown)(?: in the evidence)?|"
+    r"not (?:provided|mentioned|specified|stated|included|listed|documented|shown|recorded|populated|calculated)(?: in the evidence)?|"
     r"is not provided|is not mentioned|is not specified|"
-    r"is not documented|is not shown|"
+    r"is not documented|is not shown|is not recorded|is not populated|"
+    r"(?:field\s+)?(?:reads\s+)?(?:unassigned|redacted|tbd)\b|"
+    r"(?:left|marked)\s+blank|"
+    r"data\s+is\s+missing|"
+    r"missing from|"
     r"no (?:information|data|mention) (?:about|regarding|on|of)|"
     r"no .{1,60} (?:is |are |were |was )?(?:included|provided|stated|shown|documented)|"
     r"cannot (?:determine|confirm|verify) from|"
@@ -52,11 +56,15 @@ _INFERENCE_PHRASES = re.compile(
 # Evidence text that confirms info is missing/pending
 DEFERRAL_IN_EVIDENCE = re.compile(
     r"has not been finalized|"
+    r"has not been (?:collected|recorded|scheduled)|"
     r"not (?:been )?finalized|"
-    r"still being collected|"
+    r"not yet (?:scheduled|calculated)|"
+    r"still being (?:collected|processed)|"
+    r"testing still pending|"
     r"data is (?:still )?being|"
-    r"currently being (?:collected|restructured|reviewed|updated|finalized)|"
+    r"currently being (?:collected|restructured|reviewed|updated|finalized|processed)|"
     r"new .{0,40} (?:will be )?available next month|"
+    r"will be (?:calculated|mailed|sent|circulated|provided|available) (?:later|next|after)|"
     r"please contact|"
     r"contact(?:ed)? (?:the |directly )?.{0,30}(?:desk|office|department)|"
     r"should be contacted|"
@@ -87,6 +95,9 @@ def label_claim_against_spans(
 
     if _has_unstated_calculated_percentage(ct, spans):
         return "UNSUPPORTED", None, "calculated percentage is not explicitly stated in evidence"
+
+    if _has_unstated_calculated_total(ct, spans):
+        return "UNSUPPORTED", None, "calculated total is not explicitly stated in evidence"
 
     # ── 1. Claim says evidence is absent → NOT_IN_EVIDENCE ────────────
     if ABSENCE_IN_CLAIM.search(ct):
@@ -245,6 +256,28 @@ def _has_unstated_calculated_percentage(claim_text: str, spans: list[EvidenceSpa
         return False
 
     return any(word in claim_text.lower() for word in ("percentage", "percent", "passed", "rate"))
+
+
+def _has_unstated_calculated_total(claim_text: str, spans: list[EvidenceSpan]) -> bool:
+    """Flag total answers when the exact total is not stated in evidence.
+
+    This prevents accepting simple arithmetic or set arithmetic as textual
+    support, e.g. "40 morning, 35 afternoon, 12 both" -> "63 total".
+    """
+    ct = claim_text.lower()
+    if not re.search(r"\b(total|in total|altogether|overall)\b", ct):
+        return False
+
+    claim_nums = _extract_comparable_nums(claim_text)
+    if len(claim_nums) != 1:
+        return False
+
+    evidence_text = " ".join(span.text for span in spans)
+    evidence_nums = _extract_comparable_nums(evidence_text)
+    if not evidence_nums or not claim_nums.isdisjoint(evidence_nums):
+        return False
+
+    return len(evidence_nums) >= 2
 
 
 def _make_pointer(span: EvidenceSpan) -> EvidencePointer:

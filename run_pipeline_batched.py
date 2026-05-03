@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import time
 from pathlib import Path
@@ -41,13 +40,23 @@ def run_batched(
     # Load already-completed results
     completed: dict[str, PipelineResult] = {}
     if output_path.exists():
-        with open(output_path) as f:
-            for line in f:
+        malformed_existing = 0
+        with open(output_path, encoding="utf-8", errors="replace") as f:
+            for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if line:
-                    r = PipelineResult.model_validate_json(line)
-                    completed[r.case_id] = r
+                    try:
+                        r = PipelineResult.model_validate_json(line)
+                        completed[r.case_id] = r
+                    except Exception as exc:
+                        malformed_existing += 1
+                        print(
+                            f"[batched] warning: skipping malformed existing "
+                            f"line {line_no} in {output_path}: {exc}"
+                        )
         print(f"[batched] loaded {len(completed)} already-completed cases from {output_path}")
+        if malformed_existing:
+            print(f"[batched] skipped {malformed_existing} malformed existing rows")
 
     results: list[PipelineResult] = list(completed.values())
     remaining = [c for c in cases if c.id not in completed]
@@ -129,8 +138,9 @@ def run_batched(
             )
 
         # Append immediately (resumable)
-        with open(output_path, "a") as f:
+        with open(output_path, "a", encoding="utf-8") as f:
             f.write(r.model_dump_json() + "\n")
+            f.flush()
         results.append(r)
 
         elapsed_s = time.perf_counter() - t0_global

@@ -136,7 +136,14 @@ class TestReportPerCategory:
         _write_jsonl([pipe], pipe_path)
         report = generate_report(pipeline_path=pipe_path)
         assert config.DATASET_VERSION in report
-        assert "development benchmark" in report
+
+    def test_dataset_version_infers_stress_from_case_ids(self, tmp_path):
+        pipe = _make_pipeline(case_id="stress_001")
+        pipe_path = tmp_path / "devstral_stress_results_v2.jsonl"
+        _write_jsonl([pipe], pipe_path)
+        report = generate_report(pipeline_path=pipe_path)
+        assert "Dataset version: stress_v0.1" in report
+        assert "- Dataset version: `stress_v0.1`." in report
 
 
 class TestReportStrictMetrics:

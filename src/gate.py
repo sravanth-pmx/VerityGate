@@ -20,6 +20,18 @@ from .schemas import (
 
 _UNKNOWN_LABELS = {"UNSUPPORTED", "NEEDS_INFO", "NOT_IN_EVIDENCE"}
 
+_ARITHMETIC_DRAFT_RE = re.compile(
+    r"(?:=|\bplus\b|\bminus\b|\bdivided by\b|\bmultiplied by\b|"
+    r"\b\d[\d,.]*\s*[-+*/]\s*\d|\b\d[\d,.]*\s+out of\s+\d)",
+    re.IGNORECASE,
+)
+_SCALAR_QUESTION_RE = re.compile(
+    r"\b(?:how many|how much|what percentage|what percent|what rate|"
+    r"pass rate|growth rate|delay|total|in total|cost|percentage)\b",
+    re.IGNORECASE,
+)
+_DRAFT_NUMBER_RE = re.compile(r"(?<![A-Za-z])\d[\d,.]*(?:\.\d+)?\s*(?:%|days?)?(?![A-Za-z])")
+
 _DRAFT_CONFLICT_RE = re.compile(
     r"\b(conflicting|conflict|conflicts|discrepancy|discrepancies|"
     r"inconsistent|inconsistency|two different|different sources|"
@@ -35,7 +47,22 @@ _DRAFT_MISSING_ANSWER_RE = re.compile(
     r"there\s+is\s+no\s+information\s+about\s+whether|"
     r"no\s+information\s+about\s+whether|"
     r"doesn['’]?t\s+(?:mention|include|specify|state|provide)|"
-    r"not\s+(?:mentioned|included|specified|stated|provided|documented|shown)|"
+    r"not\s+(?:mentioned|included|specified|stated|provided|documented|shown|recorded|populated|calculated)|"
+    r"(?:field\s+)?(?:reads\s+)?(?:unassigned|redacted|tbd)\b|"
+    r"(?:left|marked)\s+blank|"
+    r"data\s+is\s+missing|"
+    r"\bmissing\s*:\s*|"
+    r"^\s*missing\b|"
+    r"(?:criteria|scores?|data|information|analysis|results?|values?|costs?|fees?)\s+(?:is|are)\s+missing|"
+    r"missing\s+from|"
+    r"not\s+yet\s+(?:scheduled|calculated|available|complete)|"
+    r"has\s+not\s+been\s+(?:collected|recorded|scheduled)|"
+    r"still\s+being\s+(?:collected|processed)|"
+    r"testing\s+still\s+pending|"
+    r"(?:analysis|review|testing|tabulation|results?)\s+(?:is|are)\s+(?:still\s+)?pending|"
+    r"\bnot\s+(?:yet\s+)?confirmed\b|"
+    r"no\s+information\s+is\s+provided\s+to\s+explain|"
+    r"will\s+be\s+(?:calculated|mailed|sent|circulated|provided|available)\s+(?:later|next|after)|"
     r"no\s+(?:information|data|evidence)\s+(?:about|on|for)|"
     r"don't\s+have\s+(?:enough\s+)?information|"
     r"do\s+not\s+have\s+(?:enough\s+)?information|"
@@ -60,10 +87,11 @@ def apply_gate(
     if verifier_output.parse_error:
         return GateOutput(
             final_answer=(
-                "I wasn't able to properly verify this answer — the verification "
-                "step produced an invalid result. I'd rather not give you something "
-                "I can't stand behind.\n\nCould you try rephrasing, or provide "
-                "additional evidence so I can give you a reliable answer?"
+                "I couldn't complete the verification step because the verifier "
+                "returned an invalid structured result. The draft answer may still "
+                "be correct, but I should not present it as verified without a "
+                "valid verification result.\n\nCould you try rephrasing, or provide "
+                "additional evidence so I can verify it reliably?"
             ),
             decision="verifier_error",
             included_claims=[], unknown_claims=[],
@@ -81,6 +109,11 @@ def apply_gate(
     # but fails to label CONTRADICTS_EVIDENCE.
     if _draft_signals_conflict(draft_answer) and not contradicted:
         return _make_draft_conflict_output(supported, unknown)
+
+    # If the verifier labels both sides of an obvious status conflict as
+    # SUPPORTED, fail closed to contradiction instead of accepting both.
+    if supported and not contradicted and _supported_claims_conflict(supported):
+        return _make_supported_conflict_output(supported, unknown)
 
     # ── Rule 1: contradiction present (always wins) ───────────────────
     if contradicted:
@@ -128,6 +161,10 @@ def apply_gate(
             return _make_partial_output(supported, gate_unknown)
 
         if _draft_signals_missing_slot(draft_answer, question, supported):
+            gate_unknown = [_make_gate_missing_claim(question)]
+            return _make_partial_output(supported, gate_unknown)
+
+        if _draft_has_unverified_computed_answer(question, draft_answer, spans):
             gate_unknown = [_make_gate_missing_claim(question)]
             return _make_partial_output(supported, gate_unknown)
 
@@ -258,6 +295,76 @@ def _draft_signals_conflict(draft_answer: str) -> bool:
     """Return True when draft itself says evidence conflicts."""
     return bool(_DRAFT_CONFLICT_RE.search(draft_answer or ""))
 
+_SUPPORTED_CONFLICT_PAIRS: list[tuple[re.Pattern, re.Pattern]] = [
+    (re.compile(r"(?<!not\s)\ballowed\b", re.I), re.compile(r"\bnot\s+allowed\b", re.I)),
+    (re.compile(r"\bactive\b", re.I), re.compile(r"\bsuspended\b", re.I)),
+    (re.compile(r"\bapproved\b", re.I), re.compile(r"\bdenied|rejected\b", re.I)),
+    (re.compile(r"\bavailable\b", re.I), re.compile(r"\bunavailable\b", re.I)),
+    (re.compile(r"\benabled\b", re.I), re.compile(r"\bdisabled\b", re.I)),
+]
+
+
+def _supported_claims_conflict(supported: list[VerifiedClaim]) -> bool:
+    """Detect obvious status opposites mislabeled as supported facts.
+
+    This is intentionally narrow. It catches cases like "remote work is
+    allowed" plus "remote work is not allowed" without trying to solve general
+    numeric/date contradiction semantics in the gate.
+    """
+    texts = [c.claim_text for c in supported]
+    for i, a in enumerate(texts):
+        for b in texts[i + 1:]:
+            if _shared_content_words(a, b) < 1:
+                continue
+            for pos, neg in _SUPPORTED_CONFLICT_PAIRS:
+                if (pos.search(a) and neg.search(b)) or (neg.search(a) and pos.search(b)):
+                    return True
+    return False
+
+
+def _shared_content_words(a: str, b: str) -> int:
+    stop = {"the", "and", "that", "with", "this", "from", "into", "says", "states"}
+    wa = {w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", a)} - stop
+    wb = {w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", b)} - stop
+    return len(wa & wb)
+
+
+def _draft_has_unverified_computed_answer(
+    question: str,
+    draft_answer: str,
+    spans: list[EvidenceSpan],
+) -> bool:
+    """Return True when a scalar answer appears calculated but not stated.
+
+    This guards against accepting supported component facts after the computed
+    conclusion disappears during claim extraction.
+    """
+    draft = draft_answer or ""
+    if not _SCALAR_QUESTION_RE.search(question or ""):
+        return False
+    if not _ARITHMETIC_DRAFT_RE.search(draft):
+        return False
+
+    draft_nums = _normalize_numbers(_DRAFT_NUMBER_RE.findall(draft))
+    if not draft_nums:
+        return False
+
+    evidence_text = " ".join(s.text for s in spans)
+    evidence_nums = _normalize_numbers(_DRAFT_NUMBER_RE.findall(evidence_text))
+    derived_nums = draft_nums - evidence_nums
+    return bool(derived_nums and len(evidence_nums) >= 2)
+
+
+def _normalize_numbers(raw_nums: list[str]) -> set[str]:
+    nums: set[str] = set()
+    for raw in raw_nums:
+        n = raw.lower().strip()
+        n = re.sub(r"[%,$\s]", "", n)
+        n = re.sub(r"days?$", "", n)
+        if n:
+            nums.add(n)
+    return nums
+
 def _make_gate_missing_claim(question: str) -> VerifiedClaim:
     """Create a deterministic unknown claim when the draft admits missing evidence."""
     return VerifiedClaim(
@@ -290,6 +397,30 @@ def _make_draft_conflict_output(
         included_claims=[c.claim_text for c in supported],
         unknown_claims=[c.claim_text for c in unknown],
         contradicted_claims=["Draft answer indicated conflicting evidence."],
+        hypothesis_claims=[],
+    )
+
+
+def _make_supported_conflict_output(
+    supported: list[VerifiedClaim],
+    unknown: list[VerifiedClaim],
+) -> GateOutput:
+    """Route obvious supported-claim status conflicts to contradiction."""
+    final = (
+        "I found mutually incompatible claims in the verified facts, so I "
+        "should not give a single clean answer."
+    )
+    final += f"\n\nWhat's conflicting:\n{_fmt_list(supported)}"
+    if unknown:
+        final += f"\n\nWhat I cannot verify:\n{_fmt_list(unknown)}"
+    final += "\n\nI recommend checking which source should take precedence."
+
+    return GateOutput(
+        final_answer=final,
+        decision="contradiction",
+        included_claims=[],
+        unknown_claims=[c.claim_text for c in unknown],
+        contradicted_claims=[c.claim_text for c in supported],
         hypothesis_claims=[],
     )
 

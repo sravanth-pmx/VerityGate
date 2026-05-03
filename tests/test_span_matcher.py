@@ -59,6 +59,37 @@ class TestLabelClaimAgainstSpans:
         assert label == "NOT_IN_EVIDENCE"
         assert ptr is None
 
+    @pytest.mark.parametrize("claim", [
+        "Blood pressure was not recorded in the note",
+        "The deposit amount is left blank",
+        "The final grade column is not populated",
+        "The judge assignment field reads unassigned",
+        "The phone number is intentionally redacted",
+        "Target CPA: TBD",
+        "Lease end date: Missing from the abstract",
+        "Battery life data is missing",
+    ])
+    def test_placeholder_values_not_in_evidence(self, claim):
+        spans = [_span(claim)]
+        label, ptr, _ = label_claim_against_spans(claim, spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    @pytest.mark.parametrize("claim", [
+        "Remedy instructions will be mailed later",
+        "Renewal premium will be calculated next quarter",
+        "Renewal premium is not yet calculated",
+        "Final exam date is not yet scheduled",
+        "Reference feedback has not been collected",
+        "The bacteria count is still being processed",
+        "Battery life testing still pending",
+    ])
+    def test_deferral_values_not_in_evidence(self, claim):
+        spans = [_span(claim)]
+        label, ptr, _ = label_claim_against_spans(claim, spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
     def test_no_slot_included_not_in_evidence(self):
         spans = [_span("No vote totals are included.")]
         label, ptr, _ = label_claim_against_spans(
@@ -161,6 +192,22 @@ class TestNumericConsistency:
         spans = [_span("77.5% of students passed the exam.")]
         label, ptr, _ = label_claim_against_spans(
             "77.5% of students passed the exam", spans)
+        assert label == "SUPPORTED"
+
+    def test_unstated_calculated_total_not_supported(self):
+        spans = [_span(
+            "The event note says 40 employees attended the morning session and "
+            "35 attended the afternoon session. It also says 12 people attended both sessions."
+        )]
+        label, ptr, _ = label_claim_against_spans(
+            "63 people attended in total", spans)
+        assert label == "UNSUPPORTED"
+        assert ptr is None
+
+    def test_stated_total_still_supported(self):
+        spans = [_span("The event report states that 63 people attended in total.")]
+        label, ptr, _ = label_claim_against_spans(
+            "63 people attended in total", spans)
         assert label == "SUPPORTED"
 
     def test_no_numbers_in_claim_still_matches(self):

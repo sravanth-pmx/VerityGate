@@ -94,6 +94,12 @@ class TestTier4SpeculativeQuestion:
     def test_what_caused(self):
         assert is_speculative_question("What caused the patient's symptoms?")
 
+    def test_diagnosis_best_explains(self):
+        assert is_speculative_question("What diagnosis best explains the symptoms?")
+
+    def test_good_place_to_buy(self):
+        assert is_speculative_question("Is this neighborhood a good place to buy?")
+
     def test_why_did(self):
         assert is_speculative_question("Why did the server crash?")
 

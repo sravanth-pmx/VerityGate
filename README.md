@@ -159,14 +159,14 @@ Small key smoke set, recommended before larger runs:
 
 ```powershell
 python run_pipeline_batched.py --cases data\stress_cases_key_24.jsonl --output results\ollama_stress_key_24.jsonl --delay 0 --skip-calibration
-python src\report\report.py --pipeline results\ollama_stress_key_24.jsonl --output results\ollama_stress_key_24_report.md
+python src\report\report.py --pipeline results\ollama_stress_key_24.jsonl --dataset-version stress_key_24 --output results\ollama_stress_key_24_report.md
 ```
 
 Full stress set:
 
 ```powershell
 python run_pipeline_batched.py --cases data\stress_cases_v0.1.jsonl --output results\ollama_stress_v0.1.jsonl --delay 0 --skip-calibration
-python src\report\report.py --pipeline results\ollama_stress_v0.1.jsonl --output results\ollama_stress_v0.1_report.md
+python src\report\report.py --pipeline results\ollama_stress_v0.1.jsonl --dataset-version stress_v0.1 --output results\ollama_stress_v0.1_report.md
 ```
 
 Full stress set with local Ollama/Gemma, assuming Ollama is running and the model name matches `ollama list`:
@@ -178,14 +178,14 @@ $env:OPENAI_API_KEY="ollama"
 $env:MODEL_NAME="gemma3:27b"
 
 python run_pipeline_batched.py --cases data\stress_cases_v0.1.jsonl --output results\ollama_gemma31_stress_v0.1.jsonl --delay 0 --skip-calibration
-python src\report\report.py --pipeline results\ollama_gemma31_stress_v0.1.jsonl --output results\ollama_gemma31_stress_v0.1_report.md
+python src\report\report.py --pipeline results\ollama_gemma31_stress_v0.1.jsonl --dataset-version stress_v0.1 --output results\ollama_gemma31_stress_v0.1_report.md
 ```
 
 Original 100-case development set:
 
 ```powershell
 python run_pipeline_batched.py --cases data\gold_cases.jsonl --output results\dev_gold_pipeline.jsonl --delay 0 --skip-calibration
-python src\report\report.py --pipeline results\dev_gold_pipeline.jsonl --output results\dev_gold_report.md
+python src\report\report.py --pipeline results\dev_gold_pipeline.jsonl --dataset-version dev_v0.4 --output results\dev_gold_report.md
 ```
 
 The batched runner is resumable at the output-file level: if an output JSONL already contains completed cases, it skips them.

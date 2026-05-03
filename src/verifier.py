@@ -315,9 +315,12 @@ def _parse_batch_table(raw: str, spans: list[EvidenceSpan]) -> tuple[list[Verifi
         if not line:
             continue
 
-        # Try to parse: NUMBER. LABEL | claim_text | span_id
+        # Try to parse: NUMBER. LABEL | claim_text | span_id.
+        # Also accept bare rows like: SUPPORTED | claim_text | span_0.
+        # Several smaller/local models follow the requested pipe format but
+        # omit numbering; this is still structured enough to repair safely.
         m = re.match(
-            r"^(?:\d+[.)]\s*|[-•]\s*)"
+            r"^(?:(?:\d+[.)]\s*|[-•]\s*))?"
             r"(\w[\w_]*)"
             r"\s*\|\s*"
             r"(.+?)"

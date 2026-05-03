@@ -101,6 +101,8 @@ _SPECULATIVE_QUESTION = re.compile(
     # Evaluative
     r"^is\s+(?:it|this|that)\s+(?:advisable|recommended|safe|a good|worth|suitable)\b|"
     r"^is\s+.+\s+(?:qualified|effective|viable|profitable|safe)\b|"
+    r"^is\s+.+\s+a\s+good\s+.+\b|"
+    r"^what\s+(?:diagnosis|cause|explanation)\s+best\s+explains?\b|"
     # Why questions seeking causal explanation
     r"^why\s+(?:did|does|would|is|are)\b",
     re.IGNORECASE,
