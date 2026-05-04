@@ -107,6 +107,29 @@ class TestContradiction:
         assert out.decision == "contradiction"
         assert out.contradicted_claims
 
+    def test_supported_same_measurement_different_values_route_contradiction(self):
+        vo = VerifierOutput(claims=[
+            VerifiedClaim(
+                claim_id="c1", claim_text="The sodium level was 132 mmol/L",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+            VerifiedClaim(
+                claim_id="c2", claim_text="The sodium level was 142 mmol/L",
+                claim_kind="fact", label="SUPPORTED",
+                evidence_pointers=[_pointer()], notes="",
+            ),
+        ])
+        out = apply_gate(
+            "What was the measured sodium level?",
+            "132 mmol/L and 142 mmol/L.",
+            vo,
+            pressure_level=0,
+            spans=[_span()],
+        )
+        assert out.decision == "contradiction"
+        assert out.contradicted_claims
+
 
 class TestNeedsInfo:
     def test_pressure_0_no_hypothesis(self):

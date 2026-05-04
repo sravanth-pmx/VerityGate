@@ -81,6 +81,8 @@ class TestLabelClaimAgainstSpans:
         "Renewal premium is not yet calculated",
         "Final exam date is not yet scheduled",
         "Reference feedback has not been collected",
+        "Reference feedback was not collected",
+        "Reference feedback: not collected",
         "The bacteria count is still being processed",
         "Battery life testing still pending",
     ])
@@ -95,6 +97,31 @@ class TestLabelClaimAgainstSpans:
         label, ptr, _ = label_claim_against_spans(
             "No vote totals are included in the evidence", spans)
         assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    @pytest.mark.parametrize("claim", [
+        "The report does not provide the average response time",
+        "The approval field is blank",
+        "No approver is listed for expense report ER-540",
+        "No approval is recorded for the expense report",
+    ])
+    def test_absence_phrases_from_v4_runs_not_in_evidence(self, claim):
+        spans = [_span(claim)]
+        label, ptr, _ = label_claim_against_spans(claim, spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_bare_slot_claim_not_in_evidence(self):
+        spans = [_span("The lease abstract lists tenant Blue Pine LLC and unit 12A. The lease end date is missing.")]
+        label, ptr, _ = label_claim_against_spans("Lease End Date:", spans)
+        assert label == "NOT_IN_EVIDENCE"
+        assert ptr is None
+
+    def test_negated_numeric_claim_not_supported_by_positive_span(self):
+        spans = [_span("The candidate has an MBA and nine years of operations experience.")]
+        label, ptr, _ = label_claim_against_spans(
+            "The candidate's years of experience is not 9", spans)
+        assert label == "UNSUPPORTED"
         assert ptr is None
 
     def test_supported_included_fact_stays_supported(self):
@@ -129,6 +156,39 @@ class TestRelabelClaims:
             claim_kind="fact", label="SUPPORTED", evidence_pointers=[_pointer()])]
         result = relabel_claims(claims, [])
         assert result[0].label == "NOT_IN_EVIDENCE"
+
+    def test_downgrade_supported_blank_field_absence(self):
+        claims = [VerifiedClaim(
+            claim_id="c1", claim_text="No approver is listed for expense report ER-540",
+            claim_kind="fact", label="SUPPORTED", evidence_pointers=[_pointer()])]
+        result = relabel_claims(claims, [])
+        assert result[0].label == "NOT_IN_EVIDENCE"
+        assert result[0].evidence_pointers == []
+
+    def test_downgrade_supported_deferral_without_been(self):
+        claims = [VerifiedClaim(
+            claim_id="c1", claim_text="Reference feedback: not collected",
+            claim_kind="fact", label="SUPPORTED", evidence_pointers=[_pointer()])]
+        result = relabel_claims(claims, [])
+        assert result[0].label == "NOT_IN_EVIDENCE"
+        assert result[0].evidence_pointers == []
+
+    def test_downgrade_supported_bare_slot(self):
+        claims = [VerifiedClaim(
+            claim_id="c1", claim_text="Lease End Date:",
+            claim_kind="fact", label="SUPPORTED", evidence_pointers=[_pointer()])]
+        result = relabel_claims(claims, [])
+        assert result[0].label == "NOT_IN_EVIDENCE"
+        assert result[0].evidence_pointers == []
+
+    def test_downgrade_supported_negated_value_claim(self):
+        spans = [_span("The candidate has an MBA and nine years of operations experience.")]
+        claims = [VerifiedClaim(
+            claim_id="c1", claim_text="The candidate's years of experience is not 9",
+            claim_kind="fact", label="SUPPORTED", evidence_pointers=[_pointer()])]
+        result = relabel_claims(claims, spans)
+        assert result[0].label == "UNSUPPORTED"
+        assert result[0].evidence_pointers == []
 
     def test_upgrade_unsupported_span_match(self):
         spans = [_span("Fingerprints were found at the scene.")]
@@ -203,6 +263,29 @@ class TestNumericConsistency:
             "63 people attended in total", spans)
         assert label == "UNSUPPORTED"
         assert ptr is None
+
+    def test_unstated_calculated_duration_not_supported(self):
+        spans = [_span(
+            "The original delivery date was April 1 and the revised delivery date is April 18. "
+            "The delay length is not stated."
+        )]
+        label, ptr, _ = label_claim_against_spans(
+            "The project is delayed by 17 days", spans)
+        assert label == "UNSUPPORTED"
+        assert ptr is None
+
+    def test_downgrade_contradiction_for_unstated_calculated_duration(self):
+        spans = [_span(
+            "The original delivery date was April 1 and the revised delivery date is April 18. "
+            "The delay length is not stated."
+        )]
+        claims = [VerifiedClaim(
+            claim_id="c1", claim_text="The project is delayed by 17 days",
+            claim_kind="fact", label="CONTRADICTS_EVIDENCE",
+            evidence_pointers=[_pointer()])]
+        result = relabel_claims(claims, spans)
+        assert result[0].label == "UNSUPPORTED"
+        assert result[0].evidence_pointers == []
 
     def test_stated_total_still_supported(self):
         spans = [_span("The event report states that 63 people attended in total.")]

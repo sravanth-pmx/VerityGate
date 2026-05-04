@@ -21,16 +21,19 @@ from .inference_detector import detect_inference
 # ── Absence / deferral patterns ───────────────────────────────────────
 # Claim text that says "evidence doesn't have X"
 ABSENCE_IN_CLAIM = re.compile(
-    r"evidence does not (?:specify|mention|include|contain|provide|state)|"
+    r"(?:evidence|report|document|record|note|summary|file|abstract)\s+does\s+not\s+"
+    r"(?:specify|mention|include|contain|provide|state|list|record)|"
     r"not (?:provided|mentioned|specified|stated|included|listed|documented|shown|recorded|populated|calculated)(?: in the evidence)?|"
     r"is not provided|is not mentioned|is not specified|"
     r"is not documented|is not shown|is not recorded|is not populated|"
+    r"\b\w+(?:\s+\w+){0,5}\s+field\s+(?:is|was)\s+blank|"
+    r"\bfield\s+(?:is|was)\s+blank|"
     r"(?:field\s+)?(?:reads\s+)?(?:unassigned|redacted|tbd)\b|"
     r"(?:left|marked)\s+blank|"
     r"data\s+is\s+missing|"
     r"missing from|"
     r"no (?:information|data|mention) (?:about|regarding|on|of)|"
-    r"no .{1,60} (?:is |are |were |was )?(?:included|provided|stated|shown|documented)|"
+    r"no .{1,60} (?:is |are |were |was )?(?:included|provided|stated|shown|documented|listed|recorded)|"
     r"cannot (?:determine|confirm|verify) from|"
     r"not enough information|"
     r"does not contain information|"
@@ -38,6 +41,8 @@ ABSENCE_IN_CLAIM = re.compile(
     r"is (?:unknown|unavailable|missing|absent)",
     re.IGNORECASE,
 )
+
+BARE_SLOT_CLAIM = re.compile(r"^\s*[\w][\w\s/()&-]{1,60}:\s*$")
 
 _INFERENCE_PHRASES = re.compile(
     r"\blikely due to\b|"
@@ -57,6 +62,7 @@ _INFERENCE_PHRASES = re.compile(
 DEFERRAL_IN_EVIDENCE = re.compile(
     r"has not been finalized|"
     r"has not been (?:collected|recorded|scheduled)|"
+    r"not (?:been )?collected|"
     r"not (?:been )?finalized|"
     r"not yet (?:scheduled|calculated)|"
     r"still being (?:collected|processed)|"
@@ -90,6 +96,9 @@ def label_claim_against_spans(
     """
     ct = claim_text.strip()
     ct_lower = ct.lower().rstrip(".")
+    if BARE_SLOT_CLAIM.search(ct):
+        return "NOT_IN_EVIDENCE", None, "claim is a bare slot with no value"
+
     if _INFERENCE_PHRASES.search(ct):
         return "UNSUPPORTED", None, "claim is an inference/conclusion, not direct evidence"
 
@@ -98,6 +107,9 @@ def label_claim_against_spans(
 
     if _has_unstated_calculated_total(ct, spans):
         return "UNSUPPORTED", None, "calculated total is not explicitly stated in evidence"
+
+    if _has_unstated_calculated_duration(ct, spans):
+        return "UNSUPPORTED", None, "calculated duration is not explicitly stated in evidence"
 
     # ── 1. Claim says evidence is absent → NOT_IN_EVIDENCE ────────────
     if ABSENCE_IN_CLAIM.search(ct):
@@ -123,6 +135,8 @@ def label_claim_against_spans(
             span_nums = _extract_comparable_nums(span.text)
             if ct_nums and ct_nums.issubset(span_nums):
                 st_words = _key_words(span.text.lower())
+                if ct_words & st_words and not _negation_consistent(ct, span.text):
+                    return "UNSUPPORTED", None, "negated claim matched non-negated evidence"
                 if ct_words & st_words:
                     ptr = _make_pointer(span)
                     return "SUPPORTED", ptr, "number + keyword match"
@@ -134,6 +148,8 @@ def label_claim_against_spans(
             overlap = len(ct_words & st_words) / len(ct_words)
             if overlap >= 0.80:
                 # Consistency check: verify numbers/entities match
+                if not _negation_consistent(ct, span.text):
+                    return "UNSUPPORTED", None, "negated claim matched non-negated evidence"
                 if _numbers_consistent(ct, span.text):
                     ptr = _make_pointer(span)
                     return "SUPPORTED", ptr, f"fuzzy match ({overlap:.0%} keyword overlap)"
@@ -170,6 +186,11 @@ def relabel_claims(
             claim.label = "NOT_IN_EVIDENCE"
             claim.evidence_pointers = []
             claim.notes = (claim.notes or "") + f" [det: absence claim, not contradiction]"
+
+        elif claim.label == "CONTRADICTS_EVIDENCE" and det_label == "UNSUPPORTED":
+            claim.label = "UNSUPPORTED"
+            claim.evidence_pointers = []
+            claim.notes = (claim.notes or "") + f" [det: unsupported claim, not contradiction]"
 
         elif claim.label in ("NOT_IN_EVIDENCE", "UNSUPPORTED") and det_label == "SUPPORTED" and det_ptr:
             claim.label = "SUPPORTED"
@@ -222,6 +243,16 @@ def _numbers_consistent(claim: str, span: str) -> bool:
         if cn not in span_nums:
             return False
     return True
+
+
+_NEGATION_RE = re.compile(r"\b(?:no|not|never|without)\b", re.IGNORECASE)
+
+
+def _negation_consistent(claim: str, span: str) -> bool:
+    """Do not support a negated claim from a non-negated fuzzy match."""
+    if not _NEGATION_RE.search(claim):
+        return True
+    return bool(_NEGATION_RE.search(span))
 
 
 def _extract_comparable_nums(text: str) -> set[str]:
@@ -278,6 +309,36 @@ def _has_unstated_calculated_total(claim_text: str, spans: list[EvidenceSpan]) -
         return False
 
     return len(evidence_nums) >= 2
+
+
+_DAY_DURATION_RE = re.compile(r"\b\d+(?:\.\d+)?\s*days?\b", re.IGNORECASE)
+_DATE_HINT_RE = re.compile(
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}\b|"
+    r"\b\d{4}-\d{2}-\d{2}\b|"
+    r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b",
+    re.IGNORECASE,
+)
+
+
+def _has_unstated_calculated_duration(claim_text: str, spans: list[EvidenceSpan]) -> bool:
+    """Flag day-duration answers when the duration is inferred from dates.
+
+    This catches date arithmetic such as April 1 to April 18 -> 17 days when
+    the evidence gives dates but does not explicitly state the duration.
+    """
+    ct = claim_text.lower()
+    if not _DAY_DURATION_RE.search(ct):
+        return False
+    if not re.search(r"\b(delay|delayed|duration|days?)\b", ct):
+        return False
+
+    evidence_text = " ".join(span.text for span in spans)
+    claim_durations = {re.sub(r"\s+", " ", m.group().lower()) for m in _DAY_DURATION_RE.finditer(claim_text)}
+    evidence_durations = {re.sub(r"\s+", " ", m.group().lower()) for m in _DAY_DURATION_RE.finditer(evidence_text)}
+    if claim_durations <= evidence_durations:
+        return False
+
+    return len(_DATE_HINT_RE.findall(evidence_text)) >= 2
 
 
 def _make_pointer(span: EvidenceSpan) -> EvidencePointer:

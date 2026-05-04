@@ -112,7 +112,7 @@ def apply_gate(
 
     # If the verifier labels both sides of an obvious status conflict as
     # SUPPORTED, fail closed to contradiction instead of accepting both.
-    if supported and not contradicted and _supported_claims_conflict(supported):
+    if supported and not contradicted and _supported_claims_conflict(question, supported):
         return _make_supported_conflict_output(supported, unknown)
 
     # ── Rule 1: contradiction present (always wins) ───────────────────
@@ -304,7 +304,13 @@ _SUPPORTED_CONFLICT_PAIRS: list[tuple[re.Pattern, re.Pattern]] = [
 ]
 
 
-def _supported_claims_conflict(supported: list[VerifiedClaim]) -> bool:
+_MEASURED_VALUE_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(mmol/l|mg|ppb|%|minutes?|days?|gb|tb|degrees?\s*c|celsius)\b",
+    re.IGNORECASE,
+)
+
+
+def _supported_claims_conflict(question: str, supported: list[VerifiedClaim]) -> bool:
     """Detect obvious status opposites mislabeled as supported facts.
 
     This is intentionally narrow. It catches cases like "remote work is
@@ -319,6 +325,8 @@ def _supported_claims_conflict(supported: list[VerifiedClaim]) -> bool:
             for pos, neg in _SUPPORTED_CONFLICT_PAIRS:
                 if (pos.search(a) and neg.search(b)) or (neg.search(a) and pos.search(b)):
                     return True
+            if _numeric_measurement_conflict(question, a, b):
+                return True
     return False
 
 
@@ -327,6 +335,41 @@ def _shared_content_words(a: str, b: str) -> int:
     wa = {w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", a)} - stop
     wb = {w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", b)} - stop
     return len(wa & wb)
+
+
+def _numeric_measurement_conflict(question: str, a: str, b: str) -> bool:
+    """Detect same-unit measured-value conflicts for the requested quantity."""
+    if _shared_content_words(a, b) < 2:
+        return False
+
+    q_words = _content_words(question)
+    if q_words and not (_content_words(a) & q_words and _content_words(b) & q_words):
+        return False
+
+    vals_a = _extract_measured_values(a)
+    vals_b = _extract_measured_values(b)
+    for unit, nums_a in vals_a.items():
+        nums_b = vals_b.get(unit)
+        if nums_b and nums_a != nums_b:
+            return True
+    return False
+
+
+def _extract_measured_values(text: str) -> dict[str, set[str]]:
+    values: dict[str, set[str]] = {}
+    for num, unit in _MEASURED_VALUE_RE.findall(text):
+        norm_unit = re.sub(r"\s+", " ", unit.lower().strip())
+        values.setdefault(norm_unit, set()).add(num)
+    return values
+
+
+def _content_words(text: str) -> set[str]:
+    stop = {
+        "what", "when", "where", "which", "with", "from", "that", "this",
+        "were", "was", "are", "the", "and", "for", "does", "did", "level",
+        "measured",
+    }
+    return {w.lower() for w in re.findall(r"\b[a-zA-Z]{4,}\b", text)} - stop
 
 
 def _draft_has_unverified_computed_answer(
