@@ -16,9 +16,10 @@ For architecture details, see [DESIGN.md](DESIGN.md). For public test-case forma
 
 ## Current Status
 
-- Two LLM calls per case: writer, then batch verifier.
-- Deterministic post-processing fixes common verifier mistakes.
-- Deterministic gate returns one of:
+- VerityGate is a lightweight research prototype for evidence-gated answering.
+- It uses two LLM calls per case: writer, then batch verifier.
+- Deterministic post-processing fixes common verifier mistakes before the gate runs.
+- The deterministic gate returns one of:
   - `accept`
   - `partial`
   - `needs_info`
@@ -28,36 +29,37 @@ For architecture details, see [DESIGN.md](DESIGN.md). For public test-case forma
   - `verifier_error`
 - Supported claims must have evidence pointers.
 - Unknowns, contradictions, and hypotheses are shown in the final answer.
-- Current 100 gold cases are a development/debug set, not publication-grade held-out results.
-- A separate 100-case stress set and 24-case key smoke subset are included for diagnostic evaluation.
+- The current 100-case stress set is diagnostic, not a publication-grade held-out benchmark.
+- The current implementation is the strongest diagnostic baseline so far: it is conservative, model-agnostic, and has shown zero unsupported accepted claims across the latest reviewed full stress runs.
 
 ## Current Diagnostic Runs
 
-These are development/stress diagnostics, not held-out benchmark results. Baseline columns are omitted here because the saved reports were pipeline-only runs.
+These are diagnostic full stress runs on `data/stress_cases_v0.1.jsonl` using the current v5 implementation. They are useful for engineering comparison and failure analysis. They should not be read as publication-grade benchmark claims.
 
-### 100-Case Development Set Splits
+| Model | Cases | Unsupported among accepts | Correct abstention | Over-abstention | Grounded accept | Contradiction detection | Pressure correctness | Partial coverage | Parse errors |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Ministral 3 14B | 100 | 0.0% | 100.0% | 0.0% | 100.0% | 100.0% | 100.0% | 100.0% | 0.0% |
+| Gemma 4 | 100 | 0.0% | 100.0% | 0.0% | 100.0% | 94.1% | 100.0% | 93.8% | 0.0% |
+| Devstral 2 123B Instruct | 100 | 0.0% | 100.0% | 5.9% | 94.1% | 100.0% | 100.0% | 100.0% | 0.0% |
+| Nemotron 3 Super | 100 | 0.0% | 100.0% | 5.9% | 94.1% | 100.0% | 94.1% | 100.0% | 1.0% |
+| Llama 3.1 8B | 100 | 0.0% | 100.0% | 58.8% | 41.2% | 70.6% | 100.0% | 100.0% | 0.0% |
 
-The original 100 development cases were run as two 50-case splits for provider quota and resumability.
+Interpretation:
 
-| Provider / model | Cases | Unsupported among accepts | Correct abstention | Grounded accept | Contradiction detection | Pressure correctness | Partial coverage | Parse errors |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Groq Llama 70B, set 1 | 50 | 0.0% | 100.0% | 100.0% | 80.0% | 80.0% | 100.0% | 0.0% |
-| Groq Llama 70B, set 2 | 50 | 0.0% | 100.0% | n/a | 100.0% | 90.0% | 100.0% | 0.0% |
-| NVIDIA Devstral, set 1 | 50 | 0.0% | 100.0% | 100.0% | 80.0% | 100.0% | 80.0% | 0.0% |
-| NVIDIA Devstral, set 2 | 50 | 0.0% | 90.9% | n/a | 90.0% | 90.0% | 100.0% | 0.0% |
+- Across the latest reviewed full stress runs, VerityGate produced no unsupported accepted answers.
+- Stronger models tend to extract cleaner claims, producing more `accept` decisions on grounded cases.
+- Weaker models can still be useful, but they often over-extract irrelevant missing claims. VerityGate then returns `partial` or `needs_info` rather than silently accepting.
+- The system is intentionally conservative. A lower `accept` rate can be acceptable when the alternative is accepting unsupported claims.
+- Some remaining failures are verifier extraction/filtering issues rather than deterministic gate failures.
 
-`n/a` means that split did not contain grounded cases, so the metric is not meaningful for that split.
+What to expect when using this repo:
 
-### 24-Case Key Smoke
-
-The key smoke set is balanced across six categories and is intended for quick regression checks before full runs.
-
-| Provider / model | Cases | Unsupported among accepts | Correct abstention | Grounded accept | Contradiction detection | Pressure correctness | Partial coverage | Parse errors |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Ollama Gemma 31B | 24 | 0.0% | 100.0% | 100.0% | 100.0% | 100.0% | 75.0% | 0.0% |
-| NVIDIA Devstral | 24 | 0.0% | 87.5% | 100.0% | 100.0% | 100.0% | 50.0% | 0.0% |
-
-After the latest partial-answer guard, the targeted NVIDIA mini rerun corrected the two main key-smoke accept/partial failures (`stress_077`, `stress_090`). A fresh full 24-case or 100-case run should be used for any updated headline table.
+- If the evidence directly supports the answer, stronger models should often produce `accept`.
+- If the answer is partly supported, VerityGate should preserve supported claims and expose missing claims as `partial`.
+- If evidence is missing, it should return `needs_info` rather than inventing an answer.
+- If evidence conflicts, it should return `contradiction` when the conflict is extracted or deterministically detected.
+- For prediction, recommendation, diagnosis, or causal-pressure questions, it should return `hypothesis` or `partial_hypothesis` instead of presenting speculation as fact.
+- Runtime cost is higher than a single LLM call because each case uses a writer call and verifier call, followed by deterministic processing.
 
 ## Pipeline
 
